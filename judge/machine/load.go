@@ -2,9 +2,12 @@ package main
 
 import (
 	"fmt"
+	"go/scanner"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -12,46 +15,81 @@ import (
 	"codeberg.org/TauCeti/mangle-go/parse"
 )
 
-func describe(source string) ([]string, error) {
+const loadedName = "judge/machine/load.mg"
+
+var mangleComment = regexp.MustCompile("\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`|(#[^\\n]*)")
+
+func describe(path, source string) ([]string, error) {
 	unit, problem := parse.Unit(strings.NewReader(source))
 	if problem != nil {
 		return nil, problem
 	}
-	atoms := []ast.Atom{}
-	for _, declared := range unit.Decls {
-		if declared.DeclaredAtom.Predicate.Symbol != "Package" {
-			atoms = append(atoms, declared.DeclaredAtom)
-		}
-	}
-	for _, clause := range unit.Clauses {
-		atoms = append(atoms, clause.Head)
-		for _, premise := range clause.Premises {
-			switch typed := premise.(type) {
-			case ast.Atom:
-				atoms = append(atoms, typed)
-			case ast.NegAtom:
-				atoms = append(atoms, typed.Atom)
-			}
-		}
-	}
 	facts := []string{}
-	for _, atom := range atoms {
+	said := func(relation string, atom ast.Atom) {
 		name := atom.Predicate.Symbol
 		if strings.HasPrefix(name, ":") {
-			continue
+			return
 		}
-		facts = append(facts, fmt.Sprintf("place_count(%q, %d).", name, len(atom.Args)))
+		facts = append(facts, fmt.Sprintf("%s(%q, %q).", relation, path, name), fmt.Sprintf("place_count(%q, %d).", name, len(atom.Args)))
 		if len(atom.Args) != 3 {
-			continue
+			return
 		}
 		if middle, isVariable := atom.Args[1].(ast.Variable); isVariable {
 			facts = append(facts, fmt.Sprintf("middle_name(%q, %q).", name, middle.Symbol))
 		}
 	}
+	for _, declared := range unit.Decls {
+		if declared.DeclaredAtom.Predicate.Symbol != "Package" {
+			said("declares", declared.DeclaredAtom)
+		}
+	}
+	for _, clause := range unit.Clauses {
+		said("defines", clause.Head)
+		for _, premise := range clause.Premises {
+			switch typed := premise.(type) {
+			case ast.Atom:
+				said("mentions", typed)
+			case ast.NegAtom:
+				said("mentions", typed.Atom)
+			}
+		}
+	}
 	return facts, nil
 }
 
-const loadedName = "judge/machine/load.mg"
+func commentLines(path, source string) []int {
+	lines := map[int]bool{}
+	if strings.HasSuffix(path, ".go") {
+		files := token.NewFileSet()
+		var reading scanner.Scanner
+		reading.Init(files.AddFile(path, -1, len(source)), []byte(source), nil, scanner.ScanComments)
+		for {
+			position, kind, text := reading.Scan()
+			if kind == token.EOF {
+				break
+			}
+			if kind == token.COMMENT {
+				first := files.Position(position).Line
+				for line := first; line <= first+strings.Count(text, "\n"); line++ {
+					lines[line] = true
+				}
+			}
+		}
+	}
+	if strings.HasSuffix(path, ".mg") {
+		for _, match := range mangleComment.FindAllStringSubmatchIndex(source, -1) {
+			if match[2] >= 0 {
+				lines[strings.Count(source[:match[2]], "\n")+1] = true
+			}
+		}
+	}
+	found := []int{}
+	for line := range lines {
+		found = append(found, line)
+	}
+	sort.Ints(found)
+	return found
+}
 
 func loadTheUniverse(root string) ([]string, error) {
 	found := map[string]bool{fmt.Sprintf("universe_file(%q).", loadedName): true}
@@ -69,20 +107,27 @@ func loadTheUniverse(root string) ([]string, error) {
 			return nil
 		}
 		relative, problem := filepath.Rel(root, path)
-		if problem != nil || filepath.ToSlash(relative) == loadedName {
+		relative = filepath.ToSlash(relative)
+		if problem != nil || relative == loadedName {
 			return problem
 		}
-		found[fmt.Sprintf("universe_file(%q).", filepath.ToSlash(relative))] = true
-		if !strings.HasSuffix(path, ".mg") {
+		found[fmt.Sprintf("universe_file(%q).", relative)] = true
+		if !strings.HasSuffix(path, ".mg") && !strings.HasSuffix(path, ".go") {
 			return nil
 		}
 		content, problem := os.ReadFile(path)
 		if problem != nil {
 			return problem
 		}
-		described, problem := describe(string(content))
+		for _, line := range commentLines(relative, string(content)) {
+			found[fmt.Sprintf("comment_line(%q, %d).", relative, line)] = true
+		}
+		if !strings.HasSuffix(path, ".mg") {
+			return nil
+		}
+		described, problem := describe(relative, string(content))
 		if problem != nil {
-			return fmt.Errorf("%s: %w", path, problem)
+			return fmt.Errorf("%s: %w", relative, problem)
 		}
 		for _, fact := range described {
 			found[fact] = true

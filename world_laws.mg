@@ -2,6 +2,7 @@ uses("language_contract").
 uses("copy_notes").
 
 Decl universe_file(Path).
+Decl comment_line(Path, Line).
 
 used_outside_the_judge("run.me").
 plain_file("judge/machine/go.mod").
@@ -22,3 +23,4 @@ violation("every_child_world_is_proven", World) :- uses(World), !verdict_of(Worl
 violation("every_file_has_its_place", Path) :- universe_file(Path), !file_in_place(Path).
 violation("every_world_folder_is_used", Path) :-
     universe_file(Path), :string:starts_with(Path, "worlds/"), !file_of_a_used_world(Path).
+violation("every_file_has_no_comments", Path) :- comment_line(Path, Line).
