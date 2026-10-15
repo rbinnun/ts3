@@ -1,0 +1,79 @@
+#!/bin/sh
+root="$(cd "$(dirname "$0")" && pwd)"
+if [ "$#" -gt 2 ] || { [ "$#" -ge 1 ] && [ ! -f "$1/world_laws.mg" ]; }; then
+	echo "usage: ./run.me [world_folder [query]]" >&2
+	exit 64
+fi
+folder="${XDG_CACHE_HOME:-$HOME/.cache}/ts3/$(printf %s "$root" | cksum | cut -d ' ' -f 1)"
+CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root" build -o "$folder/mg" codeberg.org/TauCeti/mangle-go/interpreter/mg || exit 70
+
+ask() {
+	answer="$("$folder/mg" -logtostderr -load "$1" -exec "$2" 2>&1)"
+	asked=$?
+	printf '%s\n' "$answer" | grep -v -e "^loaded " -e "^$" -e "^#PASS$" -e "^#FAIL$" | sed 's/^[A-Z][0-9]\{4\} [0-9:.]* *[0-9]* [a-z_]*\.go:[0-9]*\] //'
+	return "$asked"
+}
+
+programs_of() {
+	world="$1"
+	programs="$root/judge/universal_laws.mg,$root/judge/procedures.mg,$world/world_laws.mg"
+	[ -f "$world/world_machine.mg" ] && programs="$programs,$world/world_machine.mg"
+	for source in "$world"/sources/*.mg; do
+		[ -f "$source" ] && programs="$programs,$source"
+	done
+	for source in "$world"/sources/*.go; do
+		case "$source" in *_test.go) continue ;; esac
+		[ -f "$source" ] || continue
+		evidence="$folder/evidence/$(basename "$world")/$(basename "$source" .go)"
+		mkdir -p "$(dirname "$evidence")"
+		CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root" build -o "$evidence" "$source" || return 70
+		"$evidence" "$root" > "$evidence.mg" || return 70
+		programs="$programs,$evidence.mg"
+	done
+	printf '%s' "$programs"
+}
+
+prove() {
+	programs="$(programs_of "$1")" || exit 70
+	if ask "$programs" "proven()" > /dev/null; then
+		echo "$(basename "$1"): proven"
+		return 0
+	fi
+	echo "$(basename "$1"): broken here"
+	ask "$programs" "violation(Law, Where)" | sed 's/^/  /'
+	return 1
+}
+
+if [ "$#" -ge 1 ]; then
+	world="$(cd "$1" && pwd)"
+	language=0
+	if [ "$world" != "$root/worlds/language_contract" ]; then
+		prove "$root/worlds/language_contract"
+		language=$?
+	fi
+	ask "$(programs_of "$world")" "${2:-tells(Line)}"
+	prove "$world"
+	proved=$?
+	if [ "$language" -eq 0 ] && [ "$proved" -eq 0 ]; then
+		echo "verdict: proven"
+		exit 0
+	fi
+	echo "verdict: broken here"
+	exit 1
+fi
+
+verdicts="$folder/verdicts.mg"
+: > "$verdicts"
+for name in $(ask "$root/judge/universal_laws.mg,$root/world_laws.mg" "uses(World)" | sed -n 's/^uses("\(.*\)")$/\1/p'); do
+	if prove "$root/worlds/$name"; then
+		echo "verdict_of(\"$name\", \"proven\")." >> "$verdicts"
+	fi
+done
+universe="$root/judge/universal_laws.mg,$root/judge/procedures.mg,$root/world_laws.mg,$verdicts"
+if ask "$universe" "proven()" > /dev/null; then
+	echo "verdict: proven"
+	exit 0
+fi
+ask "$universe" "violation(Law, Where)"
+echo "verdict: broken here"
+exit 1

@@ -15,7 +15,7 @@ import (
 )
 
 func brokenLaws(test *testing.T, program string) []string {
-	laws, problem := os.ReadFile("../laws.mg")
+	laws, problem := os.ReadFile("../world_laws.mg")
 	if problem != nil {
 		test.Fatal(problem)
 	}
@@ -45,11 +45,11 @@ func brokenLaws(test *testing.T, program string) []string {
 }
 
 func TestTheProgramsOfTheRepositoryAreRead(test *testing.T) {
-	facts, problem := readThePrograms("..")
+	facts, problem := readThePrograms("../../..")
 	if problem != nil {
 		test.Fatal(problem)
 	}
-	for _, fact := range []string{`place_count("version", 3).`, `middle_name("version", "Path").`, `place_count("kept", 0).`} {
+	for _, fact := range []string{`place_count("version", 3).`, `middle_name("version", "Path").`, `place_count("proven", 0).`} {
 		if !slices.Contains(facts, fact) {
 			test.Errorf("missing %s", fact)
 		}
