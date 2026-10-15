@@ -67,14 +67,18 @@ func expectBroken(test *testing.T, law string, lawFiles []string, facts []string
 	}
 }
 
-func TestTheUniverseIsLoadedFileByFileAndProgramByProgram(test *testing.T) {
-	facts, problem := loadTheUniverse("../..")
+func TestTheUniversesMachineLoadsEveryFileAndBreaksUpEveryProgram(test *testing.T) {
+	machine, problem := os.ReadFile("../../world_machine.mg")
+	if problem != nil {
+		test.Fatal(problem)
+	}
+	facts, problem := runMachine("../..", string(machine))
 	if problem != nil {
 		test.Fatal(problem)
 	}
 	for _, fact := range []string{`universe_file("run.me").`, `universe_file("judge/machine/load.mg").`, `universe_file("judge/machine/go.sum").`,
-		`place_count("version", 3).`, `middle_name("version", "Path").`, `declares("world_laws.mg", "universe_file").`,
-		`defines("judge/universal_laws.mg", "proven").`, `mentions("judge/universal_laws.mg", "violation").`} {
+		`place_count("version",3).`, `middle_name("version","Path").`, `declares("world_laws.mg","universe_file").`,
+		`defines("judge/universal_laws.mg","proven").`, `mentions("judge/universal_laws.mg","violation").`} {
 		if !slices.Contains(facts, fact) {
 			test.Errorf("missing %s", fact)
 		}
@@ -83,6 +87,13 @@ func TestTheUniverseIsLoadedFileByFileAndProgramByProgram(test *testing.T) {
 		if strings.HasPrefix(fact, "comment_line(") {
 			test.Errorf("the universe has a comment: %s", fact)
 		}
+	}
+}
+
+func TestAMachineWantingWhatTheLibraryLacksIsStopped(test *testing.T) {
+	_, problem := runMachine("../..", "Decl got(Doing, Field, Value).\ndoes(\"fly away\").\neffect(\"fly away\", \"fly\").\n")
+	if problem == nil || !strings.Contains(problem.Error(), "no effect of the library") {
+		test.Errorf("expected the run to stop on an effect the library lacks, got %v", problem)
 	}
 }
 

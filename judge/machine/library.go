@@ -15,9 +15,58 @@ import (
 	"codeberg.org/TauCeti/mangle-go/parse"
 )
 
-const loadedName = "judge/machine/load.mg"
+var library = map[string]func(root, doing, target string) ([]string, error){
+	"list_a_folder":      listAFolder,
+	"break_up_a_program": breakUpAProgram,
+	"find_comments":      findComments,
+}
 
 var mangleComment = regexp.MustCompile("\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'|`(?:\\\\.|[^`\\\\])*`|(#[^\\n]*)")
+
+func listAFolder(root, doing, folder string) ([]string, error) {
+	start, facts := filepath.Join(root, folder), []string{}
+	problem := filepath.WalkDir(start, func(path string, entry fs.DirEntry, problem error) error {
+		if problem != nil {
+			return problem
+		}
+		if path != start && strings.HasPrefix(entry.Name(), ".") {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, problem := filepath.Rel(root, path)
+		if problem != nil {
+			return problem
+		}
+		facts = append(facts, fmt.Sprintf("got(%q, %q, %q).", doing, "file", filepath.ToSlash(relative)))
+		return nil
+	})
+	return facts, problem
+}
+
+func breakUpAProgram(root, doing, path string) ([]string, error) {
+	content, problem := os.ReadFile(filepath.Join(root, path))
+	if problem != nil {
+		return nil, problem
+	}
+	return describe(path, string(content))
+}
+
+func findComments(root, doing, path string) ([]string, error) {
+	content, problem := os.ReadFile(filepath.Join(root, path))
+	if problem != nil {
+		return nil, problem
+	}
+	facts := []string{}
+	for _, line := range commentLines(path, string(content)) {
+		facts = append(facts, fmt.Sprintf("comment_line(%q, %d).", path, line))
+	}
+	return facts, nil
+}
 
 func describe(path, source string) ([]string, error) {
 	unit, problem := parse.Unit(strings.NewReader(source))
@@ -89,70 +138,4 @@ func commentLines(path, source string) []int {
 	}
 	sort.Ints(found)
 	return found
-}
-
-func loadTheUniverse(root string) ([]string, error) {
-	found := map[string]bool{fmt.Sprintf("universe_file(%q).", loadedName): true}
-	problem := filepath.WalkDir(root, func(path string, entry fs.DirEntry, problem error) error {
-		if problem != nil {
-			return problem
-		}
-		if path != root && strings.HasPrefix(entry.Name(), ".") {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		relative, problem := filepath.Rel(root, path)
-		relative = filepath.ToSlash(relative)
-		if problem != nil || relative == loadedName {
-			return problem
-		}
-		found[fmt.Sprintf("universe_file(%q).", relative)] = true
-		if !strings.HasSuffix(path, ".mg") && !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		content, problem := os.ReadFile(path)
-		if problem != nil {
-			return problem
-		}
-		for _, line := range commentLines(relative, string(content)) {
-			found[fmt.Sprintf("comment_line(%q, %d).", relative, line)] = true
-		}
-		if !strings.HasSuffix(path, ".mg") {
-			return nil
-		}
-		described, problem := describe(relative, string(content))
-		if problem != nil {
-			return fmt.Errorf("%s: %w", relative, problem)
-		}
-		for _, fact := range described {
-			found[fact] = true
-		}
-		return nil
-	})
-	facts := []string{}
-	for fact := range found {
-		facts = append(facts, fact)
-	}
-	sort.Strings(facts)
-	return facts, problem
-}
-
-func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: load universe_folder")
-		os.Exit(64)
-	}
-	facts, problem := loadTheUniverse(os.Args[1])
-	if problem != nil {
-		fmt.Fprintf(os.Stderr, "ERROR  %v\n", problem)
-		os.Exit(70)
-	}
-	for _, fact := range facts {
-		fmt.Println(fact)
-	}
 }
