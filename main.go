@@ -34,6 +34,8 @@ var (
 	machineSym    = ast.PredicateSym{Symbol: "machine_program", Arity: 1}
 	tellsName     = "tells"
 	violationName = "violation"
+	stepNames     = map[string]bool{"does": true, "effect": true, "gives": true, "got": true}
+	outcomeNames  = map[string]bool{"does": true, "effect": true, "gives": true, "got": true, "tells": true, "violation": true}
 )
 
 const maxRounds = 100
@@ -41,28 +43,59 @@ const maxRounds = 100
 type machine struct {
 	dir      string
 	entry    string
+	program  string
 	programs []string
+	without  map[string][]byte
+	nested   bool
+	shared   *shared
+}
+
+type shared struct {
+	measured bool
+	baseline map[string]meaning
+	err      error
 }
 
 func (m *machine) at(path string) string {
 	if filepath.IsAbs(path) {
-		return path
+		return filepath.Clean(path)
 	}
 	return filepath.Join(m.dir, path)
 }
 
+func (m *machine) aside(without map[string][]byte) *machine {
+	return &machine{dir: m.dir, entry: m.entry, program: m.program, without: without, nested: true, shared: m.shared}
+}
+
+func (m *machine) source(path string) ([]byte, error) {
+	if src, ok := m.without[filepath.Clean(path)]; ok {
+		return src, nil
+	}
+	return os.ReadFile(path)
+}
+
 type effectFunc func(m *machine, in map[string][]ast.Constant) ([]result, error)
+
+type effectKind struct {
+	do    effectFunc
+	gives []string
+}
 
 type result struct {
 	field string
 	value ast.Constant
 }
 
-var effects = map[string]effectFunc{
-	"list_a_folder":    listAFolder,
-	"find_comments":    findComments,
-	"read_lines":       readLines,
-	"know_the_machine": knowTheMachine,
+var effects map[string]effectKind
+
+func init() {
+	effects = map[string]effectKind{
+		"list_a_folder":    {listAFolder, []string{"file"}},
+		"find_comments":    {findComments, []string{"syntax", "comment"}},
+		"read_lines":       {readLines, []string{"line"}},
+		"know_the_machine": {knowTheMachine, []string{"mangle_module", "mangle_version", "entry_point", "machine_program"}},
+		"take_out_a_line":  {takeOutALine, []string{"changed"}},
+	}
 }
 
 func main() {
@@ -84,13 +117,12 @@ func main() {
 
 type evaluator func(got []ast.Atom) (factstore.FactStore, error)
 
-func parseFile(path string) (parse.SourceUnit, error) {
-	src, err := os.Open(path)
+func (m *machine) parseFile(path string) (parse.SourceUnit, error) {
+	src, err := m.source(path)
 	if err != nil {
 		return parse.SourceUnit{}, err
 	}
-	defer src.Close()
-	unit, err := parse.Unit(src)
+	unit, err := parse.Unit(bytes.NewReader(src))
 	if err != nil {
 		return parse.SourceUnit{}, fmt.Errorf("parsing %s: %w", path, err)
 	}
@@ -121,35 +153,59 @@ func compile(names []string, units []parse.SourceUnit) (evaluator, error) {
 	}, nil
 }
 
+type outcome struct {
+	store factstore.FactStore
+	eval  evaluator
+	got   []ast.Atom
+}
+
 func run(path, entry string) error {
-	unit, err := parseFile(path)
+	m := &machine{dir: filepath.Dir(path), entry: entry, program: filepath.Clean(path), shared: &shared{}}
+	o, err := execute(m)
 	if err != nil {
 		return err
 	}
-	names := []string{path}
+	if violations := lines(o.store, violationName); len(violations) > 0 {
+		for _, v := range violations {
+			fmt.Fprintln(os.Stderr, "violation:", v)
+		}
+		return fmt.Errorf("%s does not hold: %d violation(s)", filepath.Base(path), len(violations))
+	}
+	for _, l := range lines(o.store, tellsName) {
+		fmt.Println(l)
+	}
+	return nil
+}
+
+func execute(m *machine) (*outcome, error) {
+	unit, err := m.parseFile(m.program)
+	if err != nil {
+		return nil, err
+	}
+	names := []string{m.program}
 	units := []parse.SourceUnit{unit}
 	eval, err := compile(names, units)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	store, err := eval(nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	m := &machine{dir: filepath.Dir(path), entry: entry}
 	var wanted []string
 	for _, f := range facts(store, machineSym) {
 		wanted = append(wanted, str(f[0]))
 	}
 	sort.Strings(wanted)
+	m.programs = nil
 	for _, name := range wanted {
-		unit, err := parseFile(m.at(name))
+		unit, err := m.parseFile(m.at(name))
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		names = append(names, m.at(name))
 		units = append(units, unit)
@@ -157,22 +213,22 @@ func run(path, entry string) error {
 	}
 	if len(m.programs) > 0 {
 		if eval, err = compile(names, units); err != nil {
-			return err
+			return nil, err
 		}
 		if store, err = eval(nil); err != nil {
-			return err
+			return nil, err
 		}
+	}
+
+	if err := checkHow(store, m.entry); err != nil {
+		return nil, err
 	}
 
 	var got []ast.Atom
 	done := map[string]bool{}
-	if err := checkHow(store, entry); err != nil {
-		return err
-	}
-
 	for round := 0; ; round++ {
 		if round == maxRounds {
-			return fmt.Errorf("still asking for new effects after %d rounds", maxRounds)
+			return nil, fmt.Errorf("still asking for new effects after %d rounds", maxRounds)
 		}
 		var todo []ast.Constant
 		for _, d := range facts(store, doesSym) {
@@ -183,31 +239,22 @@ func run(path, entry string) error {
 		if len(todo) == 0 {
 			break
 		}
+		sort.Slice(todo, func(i, j int) bool { return todo[i].String() < todo[j].String() })
 		for _, doing := range todo {
 			done[doing.String()] = true
 			out, err := perform(store, m, doing)
 			if err != nil {
-				return fmt.Errorf("does(%v): %w", doing, err)
+				return nil, fmt.Errorf("does(%v): %w", doing, err)
 			}
 			for _, r := range out {
 				got = append(got, ast.NewAtom(gotSym.Symbol, doing, ast.String(r.field), r.value))
 			}
 		}
 		if store, err = eval(got); err != nil {
-			return err
+			return nil, err
 		}
 	}
-
-	if violations := lines(store, violationName); len(violations) > 0 {
-		for _, v := range violations {
-			fmt.Fprintln(os.Stderr, "violation:", v)
-		}
-		return fmt.Errorf("%s does not hold: %d violation(s)", filepath.Base(path), len(violations))
-	}
-	for _, l := range lines(store, tellsName) {
-		fmt.Println(l)
-	}
-	return nil
+	return &outcome{store: store, eval: eval, got: got}, nil
 }
 
 func lines(store factstore.FactStore, name string) []string {
@@ -265,17 +312,22 @@ func checkHow(store factstore.FactStore, entry string) error {
 	return nil
 }
 
-func perform(store factstore.FactStore, m *machine, doing ast.Constant) ([]result, error) {
+func effectsOf(store factstore.FactStore, doing ast.Constant) []string {
 	var kinds []string
 	for _, e := range facts(store, effectSym) {
 		if e[0].Equals(doing) {
 			kinds = append(kinds, str(e[1]))
 		}
 	}
+	return kinds
+}
+
+func perform(store factstore.FactStore, m *machine, doing ast.Constant) ([]result, error) {
+	kinds := effectsOf(store, doing)
 	if len(kinds) != 1 {
 		return nil, fmt.Errorf("needs exactly one effect, found %d %v", len(kinds), kinds)
 	}
-	fn, ok := effects[kinds[0]]
+	kind, ok := effects[kinds[0]]
 	if !ok {
 		known := make([]string, 0, len(effects))
 		for k := range effects {
@@ -291,7 +343,7 @@ func perform(store factstore.FactStore, m *machine, doing ast.Constant) ([]resul
 			in[field] = append(in[field], g[2])
 		}
 	}
-	return fn(m, in)
+	return kind.do(m, in)
 }
 
 func onlyString(effect, field string, in map[string][]ast.Constant) (string, error) {
@@ -396,6 +448,196 @@ func knowTheMachine(m *machine, in map[string][]ast.Constant) ([]result, error) 
 		out = append(out, result{"machine_program", ast.String(p)})
 	}
 	return out, nil
+}
+
+func takeOutALine(m *machine, in map[string][]ast.Constant) ([]result, error) {
+	path, err := onlyString("take_out_a_line", "path", in)
+	if err != nil {
+		return nil, err
+	}
+	line, err := onlyString("take_out_a_line", "line", in)
+	if err != nil {
+		return nil, err
+	}
+	if m.nested {
+		return nil, nil
+	}
+	at := m.at(path)
+	src, err := m.source(at)
+	if err != nil {
+		return nil, err
+	}
+	rest, ok := takeOut(src, line)
+	if !ok {
+		return nil, fmt.Errorf("take_out_a_line: %s has no line %q", path, line)
+	}
+	before, err := m.shared.baselineOf(m)
+	if err != nil {
+		return nil, fmt.Errorf("take_out_a_line: %s with every line in it: %w", path, err)
+	}
+	var after map[string]meaning
+	if o, err := execute(m.aside(map[string][]byte{at: rest})); err == nil {
+		after = meanings(o)
+	}
+	var out []result
+	for _, doing := range changed(before, after) {
+		out = append(out, result{"changed", doing})
+	}
+	return out, nil
+}
+
+func takeOut(src []byte, line string) ([]byte, bool) {
+	all := strings.SplitAfter(string(src), "\n")
+	for i, l := range all {
+		if strings.TrimSuffix(strings.TrimSuffix(l, "\n"), "\r") == line {
+			return []byte(strings.Join(append(all[:i:i], all[i+1:]...), "")), true
+		}
+	}
+	return nil, false
+}
+
+func (s *shared) baselineOf(m *machine) (map[string]meaning, error) {
+	if !s.measured {
+		s.measured = true
+		o, err := execute(m.aside(nil))
+		if err != nil {
+			s.err = err
+		} else {
+			s.baseline = meanings(o)
+		}
+	}
+	return s.baseline, s.err
+}
+
+type meaning struct {
+	doing ast.Constant
+	text  string
+}
+
+func meanings(o *outcome) map[string]meaning {
+	actual := outcomeOf(o.store)
+	out := map[string]meaning{}
+	for _, d := range facts(o.store, doesSym) {
+		doing := d[0]
+		var b strings.Builder
+		b.WriteString("step\n")
+		for _, key := range sortedKeys(actual) {
+			a := actual[key]
+			if stepNames[a.Predicate.Symbol] && len(a.Args) > 0 && a.Args[0].Equals(doing) {
+				b.WriteString(key + "\n")
+			}
+		}
+		var rest []ast.Atom
+		for _, g := range o.got {
+			if !g.Args[0].Equals(doing) {
+				rest = append(rest, g)
+			}
+		}
+		b.WriteString("given nothing\n")
+		if len(rest) != len(o.got) {
+			b.WriteString(probe(o, actual, rest))
+		}
+		kinds := effectsOf(o.store, doing)
+		if len(kinds) == 1 {
+			for _, field := range effects[kinds[0]].gives {
+				more := append(append([]ast.Atom(nil), o.got...), ast.NewAtom(gotSym.Symbol, doing, ast.String(field), unexpected(o.got, doing, field)))
+				b.WriteString("given an unexpected " + field + "\n")
+				b.WriteString(probe(o, actual, more))
+			}
+		}
+		out[doing.String()] = meaning{doing: doing, text: b.String()}
+	}
+	return out
+}
+
+func probe(o *outcome, actual map[string]ast.Atom, got []ast.Atom) string {
+	store, err := o.eval(got)
+	if err != nil {
+		return "fails: " + err.Error() + "\n"
+	}
+	then := outcomeOf(store)
+	var diff []string
+	for key := range then {
+		if _, ok := actual[key]; !ok {
+			diff = append(diff, "+ "+key)
+		}
+	}
+	for key := range actual {
+		if _, ok := then[key]; !ok {
+			diff = append(diff, "- "+key)
+		}
+	}
+	sort.Strings(diff)
+	var b strings.Builder
+	for _, d := range diff {
+		b.WriteString(d + "\n")
+	}
+	return b.String()
+}
+
+func unexpected(got []ast.Atom, doing ast.Constant, field string) ast.Constant {
+	value := "unexpected"
+	for taken := true; taken; {
+		taken = false
+		for _, g := range got {
+			if g.Args[0].Equals(doing) && g.Args[1].Equals(ast.String(field)) && g.Args[2].Equals(ast.String(value)) {
+				taken = true
+				value += "!"
+				break
+			}
+		}
+	}
+	return ast.String(value)
+}
+
+func outcomeOf(store factstore.FactStore) map[string]ast.Atom {
+	out := map[string]ast.Atom{}
+	for _, pred := range store.ListPredicates() {
+		if !outcomeNames[pred.Symbol] {
+			continue
+		}
+		store.GetFacts(ast.NewQuery(pred), func(a ast.Atom) error {
+			out[a.String()] = a
+			return nil
+		})
+	}
+	return out
+}
+
+func sortedKeys(m map[string]ast.Atom) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func changed(before, after map[string]meaning) []ast.Constant {
+	seen := map[string]bool{}
+	var keys []string
+	for _, side := range []map[string]meaning{before, after} {
+		for k := range side {
+			if !seen[k] {
+				seen[k] = true
+				keys = append(keys, k)
+			}
+		}
+	}
+	sort.Strings(keys)
+	var out []ast.Constant
+	for _, k := range keys {
+		b, inBefore := before[k]
+		a, inAfter := after[k]
+		switch {
+		case inBefore && inAfter && a.text == b.text:
+		case inBefore:
+			out = append(out, b.doing)
+		default:
+			out = append(out, a.doing)
+		}
+	}
+	return out
 }
 
 type lexErrors struct {
