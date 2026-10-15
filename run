@@ -1,10 +1,14 @@
 #!/bin/sh
 root="$(cd "$(dirname "$0")" && pwd)"
-if [ "$#" -ne 1 ] || [ ! -d "$1" ]; then
-	echo "usage: ./run machine_folder" >&2
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ] || [ ! -d "$1" ]; then
+	echo "usage: ./run machine_folder [query]" >&2
 	exit 64
 fi
 machine="$(cd "$1" && pwd)"
 folder="${XDG_CACHE_HOME:-$HOME/.cache}/ts3/$(printf %s "$root" | cksum | cut -d ' ' -f 1)"
-CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root/runner" build -buildvcs=false -trimpath -o "$folder/runner" . || exit 70
-cd "$root" && exec "$folder/runner" "$root/runner" "$machine"
+CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root" build -o "$folder/mg" codeberg.org/TauCeti/mangle-go/interpreter/mg || exit 70
+programs="$root/effects.mg"
+for program in "$machine"/*.mg; do
+	programs="$programs,$program"
+done
+exec "$folder/mg" -logtostderr -load "$programs" -exec "${2:-tells(Line)}"

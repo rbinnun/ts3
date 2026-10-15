@@ -1,0 +1,24 @@
+#!/bin/sh
+root="$(cd "$(dirname "$0")" && pwd)"
+folder="${XDG_CACHE_HOME:-$HOME/.cache}/ts3/$(printf %s "$root" | cksum | cut -d ' ' -f 1)"
+CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root" build -o "$folder/mg" codeberg.org/TauCeti/mangle-go/interpreter/mg || exit 70
+CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root" build -o "$folder/read_the_programs" ./real_effects || exit 70
+"$folder/read_the_programs" "$root" > "$folder/programs.mg" || exit 70
+failed=0
+if "$folder/mg" -logtostderr -load "$root/laws.mg,$folder/programs.mg" -exec "kept()" > /dev/null 2>&1; then
+	echo "every program keeps the laws"
+else
+	"$folder/mg" -logtostderr -load "$root/laws.mg,$folder/programs.mg" -exec "violation(Law, Predicate)" 2>&1 | grep "^violation"
+	failed=1
+fi
+for machine in "$root"/machines/*/; do
+	name="$(basename "$machine")"
+	[ -f "$machine/expect.mg" ] || continue
+	if "$root/run" "$machine" "expected()" > /dev/null 2>&1; then
+		echo "$name: as expected"
+	else
+		echo "$name: not as expected"
+		failed=1
+	fi
+done
+exit "$failed"
