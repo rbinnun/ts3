@@ -1,26 +1,12 @@
-// Command universe runs a Mangle program that asks the world for things.
-//
-// The program talks to this runner through a few predicates:
-//
-//	does(Doing).                  something the program wants done
-//	effect(Doing, Kind).          which kind of effect does it
-//	gives(Doing, Field, Value).   the inputs it hands to that effect
-//	got(Doing, Field, Value).     what the effect gave back (filled in here)
-//	tells(...).                   what the program says once it knows
-//
-// and three facts about how it should be run:
-//
-//	mangle_module(Path).  mangle_version(Version).  entry_point(File).
-//
-// The runner evaluates the program, performs every effect the program asks
-// for, adds the results as got/3 facts, evaluates again until nothing new is
-// asked, and then prints every tells fact, one per line.
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
+	"go/scanner"
+	"go/token"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -32,23 +18,25 @@ import (
 	"codeberg.org/TauCeti/mangle-go/engine"
 	"codeberg.org/TauCeti/mangle-go/factstore"
 	"codeberg.org/TauCeti/mangle-go/parse"
+	"codeberg.org/TauCeti/mangle-go/parse/gen"
+	"github.com/antlr4-go/antlr/v4"
+	"mvdan.cc/sh/v3/fileutil"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 const mangleModule = "codeberg.org/TauCeti/mangle-go"
 
 var (
-	doesSym   = ast.PredicateSym{Symbol: "does", Arity: 1}
-	effectSym = ast.PredicateSym{Symbol: "effect", Arity: 2}
-	givesSym  = ast.PredicateSym{Symbol: "gives", Arity: 3}
-	gotSym    = ast.PredicateSym{Symbol: "got", Arity: 3}
-	tellsName = "tells"
+	doesSym       = ast.PredicateSym{Symbol: "does", Arity: 1}
+	effectSym     = ast.PredicateSym{Symbol: "effect", Arity: 2}
+	givesSym      = ast.PredicateSym{Symbol: "gives", Arity: 3}
+	gotSym        = ast.PredicateSym{Symbol: "got", Arity: 3}
+	tellsName     = "tells"
+	violationName = "violation"
 )
 
-// maxRounds bounds the evaluate/perform loop so a program that keeps asking
-// for new effects cannot run forever.
 const maxRounds = 100
 
-// An effect takes the fields a program gives it and returns field/value pairs.
 type effectFunc func(dir string, in map[string][]ast.Constant) ([]result, error)
 
 type result struct {
@@ -58,6 +46,7 @@ type result struct {
 
 var effects = map[string]effectFunc{
 	"list_a_folder": listAFolder,
+	"find_comments": findComments,
 }
 
 func main() {
@@ -147,9 +136,22 @@ func run(path, entry string) error {
 		}
 	}
 
-	var lines []string
+	if violations := lines(store, violationName); len(violations) > 0 {
+		for _, v := range violations {
+			fmt.Fprintln(os.Stderr, "violation:", v)
+		}
+		return fmt.Errorf("%s does not hold: %d violation(s)", filepath.Base(path), len(violations))
+	}
+	for _, l := range lines(store, tellsName) {
+		fmt.Println(l)
+	}
+	return nil
+}
+
+func lines(store factstore.FactStore, name string) []string {
+	var out []string
 	for _, pred := range store.ListPredicates() {
-		if pred.Symbol != tellsName {
+		if pred.Symbol != name {
 			continue
 		}
 		for _, args := range facts(store, pred) {
@@ -157,17 +159,13 @@ func run(path, entry string) error {
 			for i, a := range args {
 				parts[i] = show(a)
 			}
-			lines = append(lines, strings.Join(parts, "\t"))
+			out = append(out, strings.Join(parts, "\t"))
 		}
 	}
-	sort.Strings(lines)
-	for _, l := range lines {
-		fmt.Println(l)
-	}
-	return nil
+	sort.Strings(out)
+	return out
 }
 
-// checkHow makes the program's facts about how it is run hold, or says why not.
 func checkHow(store factstore.FactStore, entry string) error {
 	linked := ""
 	if bi, ok := debug.ReadBuildInfo(); ok {
@@ -200,7 +198,6 @@ func checkHow(store factstore.FactStore, entry string) error {
 	return nil
 }
 
-// perform runs the one effect a doing names, with the fields it gives.
 func perform(store factstore.FactStore, dir string, doing ast.Constant) ([]result, error) {
 	var kinds []string
 	for _, e := range facts(store, effectSym) {
@@ -230,17 +227,22 @@ func perform(store factstore.FactStore, dir string, doing ast.Constant) ([]resul
 	return fn(dir, in)
 }
 
-// listAFolder gives one "file" per entry of the folder that is not itself a
-// folder. The folder is read relative to the program's own directory, and
-// each path is the folder joined with the entry's name.
-func listAFolder(dir string, in map[string][]ast.Constant) ([]result, error) {
-	folders := in["folder"]
-	if len(folders) != 1 {
-		return nil, fmt.Errorf("list_a_folder needs exactly one \"folder\", got %d", len(folders))
+func onlyString(effect, field string, in map[string][]ast.Constant) (string, error) {
+	values := in[field]
+	if len(values) != 1 {
+		return "", fmt.Errorf("%s needs exactly one %q, got %d", effect, field, len(values))
 	}
-	folder, err := folders[0].StringValue()
+	s, err := values[0].StringValue()
 	if err != nil {
-		return nil, fmt.Errorf("list_a_folder: folder must be a string: %w", err)
+		return "", fmt.Errorf("%s: %s must be a string: %w", effect, field, err)
+	}
+	return s, nil
+}
+
+func listAFolder(dir string, in map[string][]ast.Constant) ([]result, error) {
+	folder, err := onlyString("list_a_folder", "folder", in)
+	if err != nil {
+		return nil, err
 	}
 	at := folder
 	if !filepath.IsAbs(at) {
@@ -255,7 +257,7 @@ func listAFolder(dir string, in map[string][]ast.Constant) ([]result, error) {
 		fi, err := os.Stat(filepath.Join(at, e.Name()))
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				continue // dangling link
+				continue
 			}
 			return nil, err
 		}
@@ -267,7 +269,110 @@ func listAFolder(dir string, in map[string][]ast.Constant) ([]result, error) {
 	return out, nil
 }
 
-// facts returns the arguments of every fact of pred in the store.
+func findComments(dir string, in map[string][]ast.Constant) ([]result, error) {
+	path, err := onlyString("find_comments", "path", in)
+	if err != nil {
+		return nil, err
+	}
+	at := path
+	if !filepath.IsAbs(at) {
+		at = filepath.Join(dir, path)
+	}
+	src, err := os.ReadFile(at)
+	if err != nil {
+		return nil, err
+	}
+	var comments []string
+	switch filepath.Ext(path) {
+	case ".mg":
+		comments, err = mangleComments(src)
+	case ".go":
+		comments, err = goComments(at, src)
+	default:
+		comments, err = shellComments(at, src)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find_comments in %s: %w", path, err)
+	}
+	out := make([]result, len(comments))
+	for i, c := range comments {
+		out[i] = result{"comment", ast.String(c)}
+	}
+	return out, nil
+}
+
+type lexErrors struct {
+	*antlr.DefaultErrorListener
+	errs []string
+}
+
+func (l *lexErrors) SyntaxError(_ antlr.Recognizer, _ any, line, column int, msg string, _ antlr.RecognitionException) {
+	l.errs = append(l.errs, fmt.Sprintf("%d:%d: %s", line, column, msg))
+}
+
+func mangleComments(src []byte) ([]string, error) {
+	lexer := gen.NewMangleLexer(antlr.NewInputStream(string(src)))
+	lexer.RemoveErrorListeners()
+	errs := &lexErrors{DefaultErrorListener: antlr.NewDefaultErrorListener()}
+	lexer.AddErrorListener(errs)
+	var out []string
+	for tok := lexer.NextToken(); tok.GetTokenType() != antlr.TokenEOF; tok = lexer.NextToken() {
+		if tok.GetTokenType() == gen.MangleLexerCOMMENT {
+			out = append(out, tok.GetText())
+		}
+	}
+	if len(errs.errs) > 0 {
+		return nil, errors.New(strings.Join(errs.errs, "; "))
+	}
+	return out, nil
+}
+
+func goComments(name string, src []byte) ([]string, error) {
+	fset := token.NewFileSet()
+	var errs scanner.ErrorList
+	var s scanner.Scanner
+	s.Init(fset.AddFile(name, -1, len(src)), src, errs.Add, scanner.ScanComments)
+	var out []string
+	for {
+		_, tok, lit := s.Scan()
+		if tok == token.EOF {
+			break
+		}
+		if tok == token.COMMENT {
+			out = append(out, lit)
+		}
+	}
+	if err := errs.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func shellComments(name string, src []byte) ([]string, error) {
+	lang := syntax.LangPOSIX
+	if bytes.HasPrefix(src, []byte("#!")) {
+		shell := fileutil.Shebang(src)
+		if shell == "" {
+			return nil, errors.New("starts with #! but names no shell whose comments are known")
+		}
+		if err := lang.Set(shell); err != nil {
+			return nil, err
+		}
+	}
+	f, err := syntax.NewParser(syntax.KeepComments(true), syntax.Variant(lang)).Parse(bytes.NewReader(src), name)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	syntax.Walk(f, func(n syntax.Node) bool {
+		if c, ok := n.(*syntax.Comment); ok {
+			out = append(out, "#"+c.Text)
+		}
+		return true
+	})
+	return out, nil
+}
+
 func facts(store factstore.FactStore, pred ast.PredicateSym) [][]ast.Constant {
 	var out [][]ast.Constant
 	store.GetFacts(ast.NewQuery(pred), func(a ast.Atom) error {
@@ -281,7 +386,6 @@ func facts(store factstore.FactStore, pred ast.PredicateSym) [][]ast.Constant {
 	return out
 }
 
-// str is the text of a string or name constant, or its Mangle form otherwise.
 func str(c ast.Constant) string {
 	if s, err := c.StringValue(); err == nil {
 		return s
@@ -289,7 +393,6 @@ func str(c ast.Constant) string {
 	return c.Symbol
 }
 
-// show prints a told value: strings as their text, anything else as Mangle.
 func show(c ast.Constant) string {
 	if c.Type == ast.StringType {
 		return c.Symbol

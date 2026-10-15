@@ -1,7 +1,3 @@
-#!/bin/sh
-# run.me: the entry point universe.mg names. Builds the runner (main.go)
-# against the Mangle module and version universe.mg asks for, then runs
-# universe.mg with it. Every Go cache stays inside this folder, under .deps.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 deps="$here/.deps"
