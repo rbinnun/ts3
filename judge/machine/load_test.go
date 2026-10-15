@@ -49,7 +49,7 @@ func TestTheUniverseIsLoadedFileByFileAndProgramByProgram(test *testing.T) {
 	if problem != nil {
 		test.Fatal(problem)
 	}
-	for _, fact := range []string{`universe_file("run.me").`, `universe_file("judge/machine/go.sum").`, `place_count("version", 3).`,
+	for _, fact := range []string{`universe_file("run.me").`, `universe_file("load.mg").`, `universe_file("judge/machine/go.sum").`, `place_count("version", 3).`,
 		`middle_name("version", "Path").`, `place_count("proven", 0).`} {
 		if !slices.Contains(facts, fact) {
 			test.Errorf("missing %s", fact)

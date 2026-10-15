@@ -51,8 +51,10 @@ func describe(source string) ([]string, error) {
 	return facts, nil
 }
 
+const loadedName = "load.mg"
+
 func loadTheUniverse(root string) ([]string, error) {
-	found := map[string]bool{}
+	found := map[string]bool{fmt.Sprintf("universe_file(%q).", loadedName): true}
 	problem := filepath.WalkDir(root, func(path string, entry fs.DirEntry, problem error) error {
 		if problem != nil {
 			return problem
@@ -67,7 +69,7 @@ func loadTheUniverse(root string) ([]string, error) {
 			return nil
 		}
 		relative, problem := filepath.Rel(root, path)
-		if problem != nil {
+		if problem != nil || filepath.ToSlash(relative) == loadedName {
 			return problem
 		}
 		found[fmt.Sprintf("universe_file(%q).", filepath.ToSlash(relative))] = true
