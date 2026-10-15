@@ -1,11 +1,13 @@
 mangle_module("codeberg.org/TauCeti/mangle-go").
 mangle_version("v0.7.0").
 entry_point("run.me").
+machine_program("machine.mg").
 code_ending(".go").
 module_ending("go.mod").
 module_ending("go.sum").
 
 Decl got(Doing, Field, Value).
+Decl account(Text, Doing).
 
 does("list the universe").
 effect("list the universe", "list_a_folder").
@@ -30,3 +32,14 @@ gives(Doing, "path", Path) :- finding_comments(Doing, Path).
 
 violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !datalog(Path), !machinery(Path).
 violation("the_only_knowledge_is_datalog", Path) :- finding_comments(Doing, Path), got(Doing, "comment", _).
+
+does("read the universe").
+effect("read the universe", "read_lines").
+gives("read the universe", "path", "universe.mg").
+
+universe_line(Text) :- got("read the universe", "line", Text).
+observed(Doing) :- got(Doing, _, _).
+accounted_for(Text) :- account(Text, Doing), observed(Doing).
+
+violation("every_line_is_accounted_for", Path) :- machine_program(Path), !universe_file(Path).
+violation("every_line_is_accounted_for", Text) :- universe_line(Text), !accounted_for(Text).
