@@ -51,7 +51,7 @@ func describe(source string) ([]string, error) {
 	return facts, nil
 }
 
-const loadedName = "load.mg"
+const loadedName = "judge/machine/load.mg"
 
 func loadTheUniverse(root string) ([]string, error) {
 	found := map[string]bool{fmt.Sprintf("universe_file(%q).", loadedName): true}

@@ -33,10 +33,10 @@ place_count("writes", 2).
 universe_file("judge/machine/go.mod").
 universe_file("judge/machine/go.sum").
 universe_file("judge/machine/load.go").
+universe_file("judge/machine/load.mg").
 universe_file("judge/machine/load_test.go").
 universe_file("judge/procedures.mg").
 universe_file("judge/universal_laws.mg").
-universe_file("load.mg").
 universe_file("run.me").
 universe_file("world_laws.mg").
 universe_file("worlds/copy_notes/sources/files.mg").

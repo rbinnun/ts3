@@ -8,7 +8,7 @@ folder="${XDG_CACHE_HOME:-$HOME/.cache}/ts3/$(printf %s "$root" | cksum | cut -d
 mkdir -p "$folder"
 CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root/judge/machine" build -o "$folder/mg" codeberg.org/TauCeti/mangle-go/interpreter/mg || exit 70
 CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root/judge/machine" build -o "$folder/load" . || exit 70
-loaded_facts="$root/load.mg"
+loaded_facts="$root/judge/machine/load.mg"
 "$folder/load" "$root" > "$folder/load.mg" || exit 70
 mv "$folder/load.mg" "$loaded_facts"
 
