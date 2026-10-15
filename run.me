@@ -5,7 +5,11 @@ if [ "$#" -gt 2 ] || { [ "$#" -ge 1 ] && [ ! -f "$1/world_laws.mg" ]; }; then
 	exit 64
 fi
 folder="${XDG_CACHE_HOME:-$HOME/.cache}/ts3/$(printf %s "$root" | cksum | cut -d ' ' -f 1)"
-CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root" build -o "$folder/mg" codeberg.org/TauCeti/mangle-go/interpreter/mg || exit 70
+language_world="$root/worlds/language_contract"
+mkdir -p "$folder"
+CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root/judge/machine" build -o "$folder/mg" codeberg.org/TauCeti/mangle-go/interpreter/mg || exit 70
+CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root/judge/machine" build -o "$folder/programs" . || exit 70
+"$folder/programs" "$root" > "$folder/programs.mg" || exit 70
 
 ask() {
 	answer="$("$folder/mg" -logtostderr -load "$1" -exec "$2" 2>&1)"
@@ -18,15 +22,15 @@ programs_of() {
 	world="$1"
 	programs="$root/judge/universal_laws.mg,$root/judge/procedures.mg,$world/world_laws.mg"
 	[ -f "$world/world_machine.mg" ] && programs="$programs,$world/world_machine.mg"
+	[ "$world" = "$language_world" ] && programs="$programs,$folder/programs.mg"
 	for source in "$world"/sources/*.mg; do
 		[ -f "$source" ] && programs="$programs,$source"
 	done
 	for source in "$world"/sources/*.go; do
-		case "$source" in *_test.go) continue ;; esac
 		[ -f "$source" ] || continue
 		evidence="$folder/evidence/$(basename "$world")/$(basename "$source" .go)"
 		mkdir -p "$(dirname "$evidence")"
-		CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root" build -o "$evidence" "$source" || return 70
+		CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$world/sources" build -o "$evidence" "$source" || return 70
 		"$evidence" "$root" > "$evidence.mg" || return 70
 		programs="$programs,$evidence.mg"
 	done
@@ -47,8 +51,8 @@ prove() {
 if [ "$#" -ge 1 ]; then
 	world="$(cd "$1" && pwd)"
 	language=0
-	if [ "$world" != "$root/worlds/language_contract" ]; then
-		prove "$root/worlds/language_contract"
+	if [ "$world" != "$language_world" ]; then
+		prove "$language_world"
 		language=$?
 	fi
 	ask "$(programs_of "$world")" "${2:-tells(Line)}"
@@ -69,7 +73,8 @@ for name in $(ask "$root/judge/universal_laws.mg,$root/world_laws.mg" "uses(Worl
 		echo "verdict_of(\"$name\", \"proven\")." >> "$verdicts"
 	fi
 done
-universe="$root/judge/universal_laws.mg,$root/judge/procedures.mg,$root/world_laws.mg,$verdicts"
+universe="$(programs_of "$root")" || exit 70
+universe="$universe,$verdicts"
 if ask "$universe" "proven()" > /dev/null; then
 	echo "verdict: proven"
 	exit 0

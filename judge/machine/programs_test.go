@@ -15,7 +15,7 @@ import (
 )
 
 func brokenLaws(test *testing.T, program string) []string {
-	laws, problem := os.ReadFile("../world_laws.mg")
+	laws, problem := os.ReadFile("../../worlds/language_contract/world_laws.mg")
 	if problem != nil {
 		test.Fatal(problem)
 	}
@@ -45,7 +45,7 @@ func brokenLaws(test *testing.T, program string) []string {
 }
 
 func TestTheProgramsOfTheRepositoryAreRead(test *testing.T) {
-	facts, problem := readThePrograms("../../..")
+	facts, problem := readThePrograms("../..")
 	if problem != nil {
 		test.Fatal(problem)
 	}
