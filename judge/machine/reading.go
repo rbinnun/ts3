@@ -51,16 +51,27 @@ func describe(source string) ([]string, error) {
 	return facts, nil
 }
 
-func readThePrograms(root string) ([]string, error) {
+func readTheUniverse(root string) ([]string, error) {
 	found := map[string]bool{}
 	problem := filepath.WalkDir(root, func(path string, entry fs.DirEntry, problem error) error {
 		if problem != nil {
 			return problem
 		}
-		if entry.IsDir() && path != root && strings.HasPrefix(entry.Name(), ".") {
-			return filepath.SkipDir
+		if path != root && strings.HasPrefix(entry.Name(), ".") {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
-		if entry.IsDir() || !strings.HasSuffix(path, ".mg") {
+		if entry.IsDir() {
+			return nil
+		}
+		relative, problem := filepath.Rel(root, path)
+		if problem != nil {
+			return problem
+		}
+		found[fmt.Sprintf("universe_file(%q).", filepath.ToSlash(relative))] = true
+		if !strings.HasSuffix(path, ".mg") {
 			return nil
 		}
 		content, problem := os.ReadFile(path)
@@ -86,10 +97,10 @@ func readThePrograms(root string) ([]string, error) {
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: read_the_programs folder")
+		fmt.Fprintln(os.Stderr, "usage: read universe_folder")
 		os.Exit(64)
 	}
-	facts, problem := readThePrograms(os.Args[1])
+	facts, problem := readTheUniverse(os.Args[1])
 	if problem != nil {
 		fmt.Fprintf(os.Stderr, "ERROR  %v\n", problem)
 		os.Exit(70)

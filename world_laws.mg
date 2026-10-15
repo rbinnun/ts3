@@ -8,14 +8,10 @@ plain_file("judge/machine/go.mod").
 plain_file("judge/machine/go.sum").
 
 mangle_program(Path) :- universe_file(Path), :string:ends_with(Path, ".mg").
-go_program(Path) :- universe_file(Path), :string:ends_with(Path, ".go").
-judge_program(Path) :- go_program(Path), :string:starts_with(Path, "judge/machine/").
-source_program(Path) :- go_program(Path), :string:starts_with(Path, "sources/").
-source_program(Path) :- go_program(Path), :string:starts_with(Path, "worlds/"), :string:contains(Path, "/sources/").
+judge_program(Path) :- universe_file(Path), :string:starts_with(Path, "judge/machine/"), :string:ends_with(Path, ".go").
 
 file_in_place(Path) :- mangle_program(Path).
 file_in_place(Path) :- judge_program(Path).
-file_in_place(Path) :- source_program(Path).
 file_in_place(Path) :- plain_file(Path).
 file_in_place(Path) :- used_outside_the_judge(Path).
 

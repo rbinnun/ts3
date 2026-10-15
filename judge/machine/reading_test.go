@@ -44,12 +44,13 @@ func brokenLaws(test *testing.T, program string) []string {
 	return broken
 }
 
-func TestTheProgramsOfTheRepositoryAreRead(test *testing.T) {
-	facts, problem := readThePrograms("../..")
+func TestTheUniverseIsReadFileByFileAndProgramByProgram(test *testing.T) {
+	facts, problem := readTheUniverse("../..")
 	if problem != nil {
 		test.Fatal(problem)
 	}
-	for _, fact := range []string{`place_count("version", 3).`, `middle_name("version", "Path").`, `place_count("proven", 0).`} {
+	for _, fact := range []string{`universe_file("run.me").`, `universe_file("judge/machine/go.sum").`, `place_count("version", 3).`,
+		`middle_name("version", "Path").`, `place_count("proven", 0).`} {
 		if !slices.Contains(facts, fact) {
 			test.Errorf("missing %s", fact)
 		}
