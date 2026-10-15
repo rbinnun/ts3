@@ -6,11 +6,6 @@ code_ending(".go").
 module_ending("go.mod").
 module_ending("go.sum").
 
-Decl got(Doing, Field, Value).
-Decl about(Text, Requirement).
-Decl met_by(Requirement, Doing).
-Decl taken_out(Doing, Text).
-
 does("list the universe").
 effect("list the universe", "list_a_folder").
 gives("list the universe", "folder", ".").
@@ -43,7 +38,8 @@ universe_line(Text) :- got("read the universe", "line", Text), Text != "".
 observed(Doing) :- got(Doing, _, _).
 met(Requirement) :- met_by(Requirement, Doing), observed(Doing).
 accounted_for(Text) :- about(Text, Requirement), met(Requirement).
-changes_its_step(Text) :- taken_out(Taking, Text), about(Text, Requirement), met_by(Requirement, Doing), got(Taking, "changed", Doing).
+broke(Taking) :- got(Taking, "broke", _).
+changes_its_step(Text) :- taken_out(Taking, Text), !broke(Taking), about(Text, Requirement), met_by(Requirement, Doing), got(Taking, "changed", Doing).
 
 violation("every_line_is_accounted_for", Path) :- machine_program(Path), !universe_file(Path).
 violation("every_line_is_accounted_for", Text) :- universe_line(Text), !accounted_for(Text).
