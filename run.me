@@ -7,9 +7,9 @@ fi
 folder="${XDG_CACHE_HOME:-$HOME/.cache}/ts3/$(printf %s "$root" | cksum | cut -d ' ' -f 1)"
 mkdir -p "$folder"
 CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root/judge/machine" build -o "$folder/mg" codeberg.org/TauCeti/mangle-go/interpreter/mg || exit 70
-CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root/judge/machine" build -o "$folder/read" . || exit 70
-read_facts="$folder/read.mg"
-"$folder/read" "$root" > "$read_facts" || exit 70
+CGO_ENABLED=0 GOFLAGS= GOSUMDB=off go -C "$root/judge/machine" build -o "$folder/load" . || exit 70
+loaded_facts="$folder/loaded.mg"
+"$folder/load" "$root" > "$loaded_facts" || exit 70
 
 ask() {
 	answer="$("$folder/mg" -logtostderr -load "$1" -exec "$2" 2>&1)"
@@ -24,7 +24,7 @@ programs_of() {
 	for source in "$1"/sources/*.mg; do
 		[ -f "$source" ] && programs="$programs,$source"
 	done
-	printf '%s' "$programs,$read_facts"
+	printf '%s' "$programs,$loaded_facts"
 }
 
 prove() {

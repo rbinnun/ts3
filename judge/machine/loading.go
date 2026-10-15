@@ -51,7 +51,7 @@ func describe(source string) ([]string, error) {
 	return facts, nil
 }
 
-func readTheUniverse(root string) ([]string, error) {
+func loadTheUniverse(root string) ([]string, error) {
 	found := map[string]bool{}
 	problem := filepath.WalkDir(root, func(path string, entry fs.DirEntry, problem error) error {
 		if problem != nil {
@@ -97,10 +97,10 @@ func readTheUniverse(root string) ([]string, error) {
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: read universe_folder")
+		fmt.Fprintln(os.Stderr, "usage: load universe_folder")
 		os.Exit(64)
 	}
-	facts, problem := readTheUniverse(os.Args[1])
+	facts, problem := loadTheUniverse(os.Args[1])
 	if problem != nil {
 		fmt.Fprintf(os.Stderr, "ERROR  %v\n", problem)
 		os.Exit(70)

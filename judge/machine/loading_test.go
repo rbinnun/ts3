@@ -44,8 +44,8 @@ func brokenLaws(test *testing.T, program string) []string {
 	return broken
 }
 
-func TestTheUniverseIsReadFileByFileAndProgramByProgram(test *testing.T) {
-	facts, problem := readTheUniverse("../..")
+func TestTheUniverseIsLoadedFileByFileAndProgramByProgram(test *testing.T) {
+	facts, problem := loadTheUniverse("../..")
 	if problem != nil {
 		test.Fatal(problem)
 	}
