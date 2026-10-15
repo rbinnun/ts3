@@ -31,13 +31,27 @@ var (
 	effectSym     = ast.PredicateSym{Symbol: "effect", Arity: 2}
 	givesSym      = ast.PredicateSym{Symbol: "gives", Arity: 3}
 	gotSym        = ast.PredicateSym{Symbol: "got", Arity: 3}
+	machineSym    = ast.PredicateSym{Symbol: "machine_program", Arity: 1}
 	tellsName     = "tells"
 	violationName = "violation"
 )
 
 const maxRounds = 100
 
-type effectFunc func(dir string, in map[string][]ast.Constant) ([]result, error)
+type machine struct {
+	dir      string
+	entry    string
+	programs []string
+}
+
+func (m *machine) at(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(m.dir, path)
+}
+
+type effectFunc func(m *machine, in map[string][]ast.Constant) ([]result, error)
 
 type result struct {
 	field string
@@ -45,8 +59,10 @@ type result struct {
 }
 
 var effects = map[string]effectFunc{
-	"list_a_folder": listAFolder,
-	"find_comments": findComments,
+	"list_a_folder":    listAFolder,
+	"find_comments":    findComments,
+	"read_lines":       readLines,
+	"know_the_machine": knowTheMachine,
 }
 
 func main() {
@@ -66,19 +82,26 @@ func main() {
 	}
 }
 
-func run(path, entry string) error {
+type evaluator func(got []ast.Atom) (factstore.FactStore, error)
+
+func parseFile(path string) (parse.SourceUnit, error) {
 	src, err := os.Open(path)
 	if err != nil {
-		return err
+		return parse.SourceUnit{}, err
 	}
+	defer src.Close()
 	unit, err := parse.Unit(src)
-	src.Close()
 	if err != nil {
-		return fmt.Errorf("parsing %s: %w", path, err)
+		return parse.SourceUnit{}, fmt.Errorf("parsing %s: %w", path, err)
 	}
-	info, err := analysis.AnalyzeOneUnit(unit, nil)
+	return unit, nil
+}
+
+func compile(names []string, units []parse.SourceUnit) (evaluator, error) {
+	what := strings.Join(names, " with ")
+	info, err := analysis.Analyze(units, nil)
 	if err != nil {
-		return fmt.Errorf("analyzing %s: %w", path, err)
+		return nil, fmt.Errorf("analyzing %s: %w", what, err)
 	}
 	strata, predToStratum, err := analysis.Stratify(analysis.Program{
 		EdbPredicates: info.EdbPredicates,
@@ -86,24 +109,63 @@ func run(path, entry string) error {
 		Rules:         info.Rules,
 	})
 	if err != nil {
-		return fmt.Errorf("stratifying %s: %w", path, err)
+		return nil, fmt.Errorf("stratifying %s: %w", what, err)
 	}
-	eval := func(got []ast.Atom) (factstore.FactStore, error) {
+	return func(got []ast.Atom) (factstore.FactStore, error) {
 		store := factstore.NewSimpleInMemoryStore()
 		for _, g := range got {
 			store.Add(g)
 		}
 		_, err := engine.EvalStratifiedProgramWithStats(info, strata, predToStratum, store)
 		return store, err
-	}
+	}, nil
+}
 
-	dir := filepath.Dir(path)
-	var got []ast.Atom
-	done := map[string]bool{}
+func run(path, entry string) error {
+	unit, err := parseFile(path)
+	if err != nil {
+		return err
+	}
+	names := []string{path}
+	units := []parse.SourceUnit{unit}
+	eval, err := compile(names, units)
+	if err != nil {
+		return err
+	}
 	store, err := eval(nil)
 	if err != nil {
 		return err
 	}
+
+	m := &machine{dir: filepath.Dir(path), entry: entry}
+	var wanted []string
+	for _, f := range facts(store, machineSym) {
+		wanted = append(wanted, str(f[0]))
+	}
+	sort.Strings(wanted)
+	for _, name := range wanted {
+		unit, err := parseFile(m.at(name))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		names = append(names, m.at(name))
+		units = append(units, unit)
+		m.programs = append(m.programs, name)
+	}
+	if len(m.programs) > 0 {
+		if eval, err = compile(names, units); err != nil {
+			return err
+		}
+		if store, err = eval(nil); err != nil {
+			return err
+		}
+	}
+
+	var got []ast.Atom
+	done := map[string]bool{}
 	if err := checkHow(store, entry); err != nil {
 		return err
 	}
@@ -123,7 +185,7 @@ func run(path, entry string) error {
 		}
 		for _, doing := range todo {
 			done[doing.String()] = true
-			out, err := perform(store, dir, doing)
+			out, err := perform(store, m, doing)
 			if err != nil {
 				return fmt.Errorf("does(%v): %w", doing, err)
 			}
@@ -166,7 +228,7 @@ func lines(store factstore.FactStore, name string) []string {
 	return out
 }
 
-func checkHow(store factstore.FactStore, entry string) error {
+func linkedVersion() string {
 	linked := ""
 	if bi, ok := debug.ReadBuildInfo(); ok {
 		for _, dep := range bi.Deps {
@@ -178,6 +240,11 @@ func checkHow(store factstore.FactStore, entry string) error {
 			}
 		}
 	}
+	return linked
+}
+
+func checkHow(store factstore.FactStore, entry string) error {
+	linked := linkedVersion()
 	for _, f := range facts(store, ast.PredicateSym{Symbol: "mangle_module", Arity: 1}) {
 		if want := str(f[0]); want != mangleModule {
 			return fmt.Errorf("program wants Mangle module %q, this runner is built on %q", want, mangleModule)
@@ -198,7 +265,7 @@ func checkHow(store factstore.FactStore, entry string) error {
 	return nil
 }
 
-func perform(store factstore.FactStore, dir string, doing ast.Constant) ([]result, error) {
+func perform(store factstore.FactStore, m *machine, doing ast.Constant) ([]result, error) {
 	var kinds []string
 	for _, e := range facts(store, effectSym) {
 		if e[0].Equals(doing) {
@@ -224,7 +291,7 @@ func perform(store factstore.FactStore, dir string, doing ast.Constant) ([]resul
 			in[field] = append(in[field], g[2])
 		}
 	}
-	return fn(dir, in)
+	return fn(m, in)
 }
 
 func onlyString(effect, field string, in map[string][]ast.Constant) (string, error) {
@@ -239,15 +306,12 @@ func onlyString(effect, field string, in map[string][]ast.Constant) (string, err
 	return s, nil
 }
 
-func listAFolder(dir string, in map[string][]ast.Constant) ([]result, error) {
+func listAFolder(m *machine, in map[string][]ast.Constant) ([]result, error) {
 	folder, err := onlyString("list_a_folder", "folder", in)
 	if err != nil {
 		return nil, err
 	}
-	at := folder
-	if !filepath.IsAbs(at) {
-		at = filepath.Join(dir, folder)
-	}
+	at := m.at(folder)
 	entries, err := os.ReadDir(at)
 	if err != nil {
 		return nil, err
@@ -269,34 +333,67 @@ func listAFolder(dir string, in map[string][]ast.Constant) ([]result, error) {
 	return out, nil
 }
 
-func findComments(dir string, in map[string][]ast.Constant) ([]result, error) {
+func findComments(m *machine, in map[string][]ast.Constant) ([]result, error) {
 	path, err := onlyString("find_comments", "path", in)
 	if err != nil {
 		return nil, err
 	}
-	at := path
-	if !filepath.IsAbs(at) {
-		at = filepath.Join(dir, path)
-	}
+	at := m.at(path)
 	src, err := os.ReadFile(at)
 	if err != nil {
 		return nil, err
 	}
 	var comments []string
+	var lang string
 	switch filepath.Ext(path) {
 	case ".mg":
+		lang = "mangle"
 		comments, err = mangleComments(src)
 	case ".go":
+		lang = "go"
 		comments, err = goComments(at, src)
 	default:
-		comments, err = shellComments(at, src)
+		lang, comments, err = shellComments(at, src)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("find_comments in %s: %w", path, err)
 	}
-	out := make([]result, len(comments))
-	for i, c := range comments {
-		out[i] = result{"comment", ast.String(c)}
+	out := []result{{"syntax", ast.String(lang)}}
+	for _, c := range comments {
+		out = append(out, result{"comment", ast.String(c)})
+	}
+	return out, nil
+}
+
+func readLines(m *machine, in map[string][]ast.Constant) ([]result, error) {
+	path, err := onlyString("read_lines", "path", in)
+	if err != nil {
+		return nil, err
+	}
+	src, err := os.ReadFile(m.at(path))
+	if err != nil {
+		return nil, err
+	}
+	if len(src) == 0 {
+		return nil, nil
+	}
+	var out []result
+	for _, line := range strings.Split(strings.TrimSuffix(string(src), "\n"), "\n") {
+		out = append(out, result{"line", ast.String(strings.TrimSuffix(line, "\r"))})
+	}
+	return out, nil
+}
+
+func knowTheMachine(m *machine, in map[string][]ast.Constant) ([]result, error) {
+	out := []result{{"mangle_module", ast.String(mangleModule)}}
+	if v := linkedVersion(); v != "" {
+		out = append(out, result{"mangle_version", ast.String(v)})
+	}
+	if m.entry != "" {
+		out = append(out, result{"entry_point", ast.String(m.entry)})
+	}
+	for _, p := range m.programs {
+		out = append(out, result{"machine_program", ast.String(p)})
 	}
 	return out, nil
 }
@@ -348,20 +445,20 @@ func goComments(name string, src []byte) ([]string, error) {
 	return out, nil
 }
 
-func shellComments(name string, src []byte) ([]string, error) {
+func shellComments(name string, src []byte) (string, []string, error) {
 	lang := syntax.LangPOSIX
 	if bytes.HasPrefix(src, []byte("#!")) {
 		shell := fileutil.Shebang(src)
 		if shell == "" {
-			return nil, errors.New("starts with #! but names no shell whose comments are known")
+			return "", nil, errors.New("starts with #! but names no shell whose comments are known")
 		}
 		if err := lang.Set(shell); err != nil {
-			return nil, err
+			return "", nil, err
 		}
 	}
 	f, err := syntax.NewParser(syntax.KeepComments(true), syntax.Variant(lang)).Parse(bytes.NewReader(src), name)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	var out []string
 	syntax.Walk(f, func(n syntax.Node) bool {
@@ -370,7 +467,7 @@ func shellComments(name string, src []byte) ([]string, error) {
 		}
 		return true
 	})
-	return out, nil
+	return lang.String(), out, nil
 }
 
 func facts(store factstore.FactStore, pred ast.PredicateSym) [][]ast.Constant {
