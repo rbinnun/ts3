@@ -4,7 +4,8 @@ A runner, worked out in logic first.
 
 The machine decides; the runner does, one thing at a time.
 
-- **A machine** is a Mangle program (`machine.mg`). Each turn it says the one thing it `wants` done next.
+- **A machine** is a Mangle program (`machine.mg`). Each turn it says the one thing it `wants` done next, and `gives` what that thing needs.
+- **Facts stay small:** one or two places, or three only when the middle one is a label, as in `gives(Doing, Field, Value)`. Small words build up to larger things.
 - **A turn is pure logic** (`runner/step.mg`): it does the wanted thing and carries everything else into the next turn as `next_` facts.
 - **Effects are simulated.** The world is facts, such as `file(Path, Content)`. Reading looks a fact up; writing replaces one.
 - **The only code outside logic** (`runner/main.go`) repeats the turn until the machine wants nothing. It stops a machine that wants two things at once.
@@ -20,8 +21,11 @@ Go 1.25 or newer:
 ```
 
 ```
-turn 0: wants("read notes","read_a_file","notes.txt","")
-turn 1: wants("copy notes","write_a_file","copy.txt","hello")
+turn 0: wants("read notes","read_a_file")
+        gives("read notes","path","notes.txt")
+turn 1: wants("copy notes","write_a_file")
+        gives("copy notes","content","hello")
+        gives("copy notes","path","copy.txt")
 after 2 turns:
 file("copy.txt","hello")
 file("notes.txt","hello")

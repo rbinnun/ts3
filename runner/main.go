@@ -17,11 +17,11 @@ import (
 const turnLimit = 1000
 
 type Run struct {
-	Wanted []string
-	Ended  []string
+	Turns [][]string
+	Ended []string
 }
 
-func evaluate(program string) ([]string, error) {
+func evaluate(program string) ([]ast.Atom, error) {
 	unit, problem := parse.Unit(strings.NewReader(program))
 	if problem != nil {
 		return nil, problem
@@ -34,20 +34,30 @@ func evaluate(program string) ([]string, error) {
 	if problem := engine.EvalProgram(analysed, store, engine.WithCreatedFactLimit(1000000)); problem != nil {
 		return nil, problem
 	}
-	facts := []string{}
+	facts := []ast.Atom{}
 	problem = factstore.GetAllFacts(store, func(atom ast.Atom) error {
-		facts = append(facts, atom.String())
+		facts = append(facts, atom)
 		return nil
 	})
-	sort.Strings(facts)
+	sort.Slice(facts, func(first, second int) bool { return facts[first].String() < facts[second].String() })
 	return facts, problem
 }
 
-func named(facts []string, name string) []string {
+func named(facts []ast.Atom, name string) []string {
 	found := []string{}
 	for _, item := range facts {
-		if strings.HasPrefix(item, name+"(") {
-			found = append(found, item)
+		if item.Predicate.Symbol == name {
+			found = append(found, item.String())
+		}
+	}
+	return found
+}
+
+func givenFor(facts []ast.Atom, doing ast.BaseTerm) []string {
+	found := []string{}
+	for _, item := range facts {
+		if item.Predicate.Symbol == "gives" && item.Args[0].Equals(doing) {
+			found = append(found, item.String())
 		}
 	}
 	return found
@@ -60,18 +70,24 @@ func runMachine(step, machine, world string) (Run, error) {
 		if problem != nil {
 			return ran, fmt.Errorf("turn %d: %w", turn, problem)
 		}
-		wants := named(facts, "wants")
+		wanting := []ast.Atom{}
+		for _, item := range facts {
+			if item.Predicate.Symbol == "wants" {
+				wanting = append(wanting, item)
+			}
+		}
 		switch {
-		case len(wants) == 0:
+		case len(wanting) == 0:
 			ran.Ended = append(named(facts, "file"), named(facts, "tells")...)
 			return ran, nil
-		case len(wants) > 1:
-			return ran, fmt.Errorf("turn %d: the machine wants %d things at once: %s", turn, len(wants), strings.Join(wants, " "))
+		case len(wanting) > 1:
+			return ran, fmt.Errorf("turn %d: the machine wants %d things at once: %s", turn, len(wanting),
+				strings.Join(named(facts, "wants"), " "))
 		}
-		ran.Wanted = append(ran.Wanted, wants[0])
+		ran.Turns = append(ran.Turns, append([]string{wanting[0].String()}, givenFor(facts, wanting[0].Args[0])...))
 		next := []string{}
 		for _, item := range facts {
-			if rest, found := strings.CutPrefix(item, "next_"); found {
+			if rest, found := strings.CutPrefix(item.String(), "next_"); found {
 				next = append(next, rest+".")
 			}
 		}
@@ -103,14 +119,14 @@ func main() {
 		os.Exit(70)
 	}
 	ran, problem := runMachine(read[0], read[1], read[2])
-	for turn, wanted := range ran.Wanted {
-		fmt.Printf("turn %d: %s\n", turn, wanted)
+	for turn, lines := range ran.Turns {
+		fmt.Printf("turn %d: %s\n", turn, strings.Join(lines, "\n        "))
 	}
 	if problem != nil {
 		fmt.Fprintf(os.Stderr, "ERROR  %v\n", problem)
 		os.Exit(1)
 	}
-	fmt.Printf("after %d turns:\n", len(ran.Wanted))
+	fmt.Printf("after %d turns:\n", len(ran.Turns))
 	for _, item := range ran.Ended {
 		fmt.Println(item)
 	}

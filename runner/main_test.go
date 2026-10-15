@@ -21,9 +21,12 @@ func TestCopyNotesReadsThenCopiesThenTells(test *testing.T) {
 	if problem != nil {
 		test.Fatal(problem)
 	}
-	wanted := []string{`wants("read notes","read_a_file","notes.txt","")`, `wants("copy notes","write_a_file","copy.txt","hello")`}
-	if !reflect.DeepEqual(ran.Wanted, wanted) {
-		test.Errorf("wanted %v, got %v", wanted, ran.Wanted)
+	turns := [][]string{
+		{`wants("read notes","read_a_file")`, `gives("read notes","path","notes.txt")`},
+		{`wants("copy notes","write_a_file")`, `gives("copy notes","content","hello")`, `gives("copy notes","path","copy.txt")`},
+	}
+	if !reflect.DeepEqual(ran.Turns, turns) {
+		test.Errorf("turns were %v, want %v", ran.Turns, turns)
 	}
 	ended := []string{`file("copy.txt","hello")`, `file("notes.txt","hello")`, `tells("notes say: hello")`}
 	if !reflect.DeepEqual(ran.Ended, ended) {
@@ -32,7 +35,7 @@ func TestCopyNotesReadsThenCopiesThenTells(test *testing.T) {
 }
 
 func TestAMachineThatWantsTwoThingsAtOnceIsStopped(test *testing.T) {
-	machine := `wants("one", "read_a_file", "a.txt", "") :- !done("one").` + "\n" + `wants("two", "read_a_file", "b.txt", "") :- !done("two").`
+	machine := `wants("one", "read_a_file") :- !done("one").` + "\n" + `wants("two", "read_a_file") :- !done("two").`
 	_, problem := runMachine(readFor(test, "step.mg"), machine, "")
 	if problem == nil || !strings.Contains(problem.Error(), "wants 2 things at once") {
 		test.Errorf("expected the run to stop on two wants at once, got %v", problem)
