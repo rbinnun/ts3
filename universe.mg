@@ -18,6 +18,10 @@ why("the_only_knowledge_is_datalog", "knowledge kept in code, comments or prose 
 why("the machinery", "every line of code is knowledge the world cannot read, so the machinery holds only what the spec needs").
 why("every_line_is_accounted_for", "a line with no path to what the world does is knowledge nobody uses; the account is a justification for the owner to read and judge, not a proof").
 why("every_requirement_has_a_reason", "a requirement without a reason cannot be judged: its why says what it means and why it is there").
+why("observations", "only the machine states got facts, from steps it actually ran; a got fact written into a program is a faked observation").
+why("decisions", "the machinery acts and Datalog decides: anything the machine decides about the world, such as which language a file is written in, belongs in Datalog where it can be read").
+why("the output", "what the world tells is knowledge too, so it comes out as valid Datalog that another world could load").
+why("the answer", "a world that is false and a machine that could not run are different answers, and the run says which").
 
 does("list the universe").
 effect("list the universe", "list_a_folder").
