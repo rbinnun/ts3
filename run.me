@@ -1,8 +1,11 @@
-set -u
-here=$(cd "$(dirname "$0")" && pwd) || exit 2
-deps="$here/.deps"
-export GOPATH="$deps/gopath" GOMODCACHE="$deps/gomodcache" GOCACHE="$deps/gocache" \
-       XDG_CONFIG_HOME="$deps/config" GOFLAGS=-modcacherw
-cd "$here" || exit 2
-go build -o "$deps/bin/universe" . || exit 2
-exec "$deps/bin/universe" -entry "$(basename "$0")" "$here/universe.mg"
+cd "$(dirname "$0")" || exit 2
+machinery=$(mktemp -d) || exit 2
+if GOFLAGS=-mod=readonly GOWORK=off go build -o "$machinery/machinery" .
+then
+  "$machinery/machinery" universe.mg
+  code=$?
+else
+  code=2
+fi
+rm -rf "$machinery"
+exit "$code"

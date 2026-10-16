@@ -1,903 +1,560 @@
 package main
 
 import (
-	"bytes"
 	"errors"
-	"flag"
 	"fmt"
-	"go/scanner"
-	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime/debug"
-	"slices"
 	"sort"
 	"strings"
+	"sync"
+
+	antlr "github.com/antlr4-go/antlr/v4"
 
 	"codeberg.org/TauCeti/mangle-go/analysis"
 	"codeberg.org/TauCeti/mangle-go/ast"
 	"codeberg.org/TauCeti/mangle-go/engine"
 	"codeberg.org/TauCeti/mangle-go/factstore"
-	"codeberg.org/TauCeti/mangle-go/packages"
 	"codeberg.org/TauCeti/mangle-go/parse"
 	"codeberg.org/TauCeti/mangle-go/parse/gen"
-	"codeberg.org/TauCeti/mangle-go/unionfind"
-	"github.com/antlr4-go/antlr/v4"
-	"mvdan.cc/sh/v3/syntax"
 )
 
-const mangleModule = "codeberg.org/TauCeti/mangle-go"
+const brokenCode = 2
 
-var (
-	doesSym        = ast.PredicateSym{Symbol: "does", Arity: 1}
-	effectSym      = ast.PredicateSym{Symbol: "effect", Arity: 2}
-	givesSym       = ast.PredicateSym{Symbol: "gives", Arity: 3}
-	gotSym         = ast.PredicateSym{Symbol: "got", Arity: 3}
-	machineSym     = ast.PredicateSym{Symbol: "machine_program", Arity: 1}
-	outputSym      = ast.PredicateSym{Symbol: "output", Arity: 2}
-	answerSym      = ast.PredicateSym{Symbol: "answer", Arity: 1}
-	exitCodeSym    = ast.PredicateSym{Symbol: "exit_code", Arity: 2}
-	startedSym     = ast.PredicateSym{Symbol: "started_by", Arity: 1}
-	firedSym       = ast.PredicateSym{Symbol: "fired", Arity: 2}
-	firedInCaseSym = ast.PredicateSym{Symbol: "fired_in_a_case", Arity: 2}
-)
+var kinds = map[string]bool{"list": true, "read": true, "parse": true, "start": true, "trace": true}
 
-const (
-	maxRounds  = 100
-	brokenExit = 2
-	runACaseFx = "run_a_case"
-)
+type world map[string]string
 
-type machine struct {
-	dir          string
-	program      string
-	entry        string
-	startedBy    []string
-	programs     []string
-	firedInCases []ast.Atom
+type site struct {
+	path   string
+	number int
+}
+
+type program struct {
+	info    *analysis.ProgramInfo
+	facts   []site
+	markers map[string]site
+}
+
+type step struct {
+	key    string
+	doing  ast.Constant
+	effect string
+	kind   string
+	gives  map[string][]ast.Constant
 }
 
 type outcome struct {
-	code  int
-	told  []ast.Atom
-	fired []ast.Atom
-}
-
-func (m *machine) at(path string) string {
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path)
-	}
-	return filepath.Join(m.dir, path)
-}
-
-func (m *machine) rel(path string) string {
-	if r, err := filepath.Rel(m.dir, m.at(path)); err == nil {
-		return r
-	}
-	return path
-}
-
-type effectFunc func(m *machine, in map[string][]ast.Constant) ([]result, error)
-
-type result struct {
-	field string
-	value ast.Constant
-}
-
-var effects map[string]effectFunc
-
-func init() {
-	effects = map[string]effectFunc{
-		"list_a_folder":    listAFolder,
-		"find_comments":    findComments,
-		"read_a_program":   readAProgram,
-		"read_lines":       readLines,
-		"know_the_machine": knowTheMachine,
-		runACaseFx:         runACase,
-	}
-}
-
-var commentFinders = map[string]func(name string, src []byte) ([]string, error){
-	"mangle": mangleComments,
-	"go":     goComments,
-	"sh":     shellComments,
+	code    int
+	outputs []ast.Atom
+	fired   []site
+	err     error
 }
 
 func main() {
-	entry := flag.String("entry", "", "name of the entry point this runner was started through")
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "usage: %s [-entry NAME] PROGRAM.mg\n", filepath.Base(os.Args[0]))
-		flag.PrintDefaults()
+	if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, "the machinery starts from exactly one program")
+		os.Exit(brokenCode)
 	}
-	flag.Parse()
-	if flag.NArg() != 1 {
-		flag.Usage()
-		os.Exit(brokenExit)
-	}
-	code, err := run(flag.Arg(0), *entry)
+	w, err := readWorld(".")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(brokenExit)
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(brokenCode)
 	}
-	os.Exit(code)
+	o := run(w, os.Args[1], nil)
+	if o.err != nil {
+		fmt.Fprintln(os.Stderr, o.err)
+	}
+	for _, a := range o.outputs {
+		fmt.Println(a.String() + ".")
+	}
+	os.Exit(o.code)
 }
 
-type evaluator func(in []ast.Atom) (factstore.FactStore, []ast.Atom, error)
-
-type program struct {
-	path  string
-	unit  parse.SourceUnit
-	lines []string
+func readWorld(root string) (world, error) {
+	w := world{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		w[filepath.ToSlash(rel)] = string(content)
+		return nil
+	})
+	return w, err
 }
 
-func parseFile(path string) (program, error) {
-	src, err := os.ReadFile(path)
-	if err != nil {
-		return program{}, err
+func (w world) paths() []string {
+	var paths []string
+	for path := range w {
+		paths = append(paths, path)
 	}
-	unit, err := parse.Unit(bytes.NewReader(src))
-	if err != nil {
-		return program{}, fmt.Errorf("parsing %s: %w", path, err)
-	}
-	lines, err := clauseLines(string(src))
-	if err != nil {
-		return program{}, fmt.Errorf("parsing %s: %w", path, err)
-	}
-	if len(lines) != len(unit.Clauses) {
-		return program{}, fmt.Errorf("parsing %s: found %d clauses on %d lines", path, len(unit.Clauses), len(lines))
-	}
-	return program{path: path, unit: unit, lines: lines}, nil
+	sort.Strings(paths)
+	return paths
 }
 
-func clauseLines(src string) ([]string, error) {
-	lexer := gen.NewMangleLexer(antlr.NewInputStream(src))
+func (w world) with(additions [][2]string) world {
+	next := world{}
+	for path, content := range w {
+		next[path] = content
+	}
+	for _, addition := range additions {
+		content := next[addition[0]]
+		if content != "" && !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		next[addition[0]] = content + addition[1] + "\n"
+	}
+	return next
+}
+
+func linesOf(content string) []string {
+	if content == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+}
+
+func parseText(text string) (parse.SourceUnit, []int, error) {
+	unit, err := parse.Unit(strings.NewReader(text))
+	if err != nil {
+		return parse.SourceUnit{}, nil, err
+	}
+	lexer := gen.NewMangleLexer(antlr.NewInputStream(text))
 	lexer.RemoveErrorListeners()
 	parser := gen.NewMangleParser(antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel))
 	parser.RemoveErrorListeners()
-	errs := &lexErrors{DefaultErrorListener: antlr.NewDefaultErrorListener()}
-	lexer.AddErrorListener(errs)
-	parser.AddErrorListener(errs)
-	tree := parser.Start_()
-	if len(errs.errs) > 0 {
-		return nil, errors.New(strings.Join(errs.errs, "; "))
+	var lines []int
+	for _, clause := range parser.Start_().Program().AllClause() {
+		lines = append(lines, clause.GetStart().GetLine())
 	}
-	text := strings.Split(src, "\n")
-	var out []string
-	for _, c := range tree.Program().AllClause() {
-		from, to := c.GetStart().GetLine(), c.GetStop().GetLine()
-		if from < 1 || to < from || to > len(text) {
-			return nil, fmt.Errorf("a clause spans lines %d to %d of %d", from, to, len(text))
+	if len(lines) != len(unit.Clauses) {
+		return parse.SourceUnit{}, nil, errors.New("the clauses of the program could not be placed on lines")
+	}
+	return unit, lines, nil
+}
+
+func load(w world, files []string) (*program, error) {
+	p := &program{markers: map[string]site{}}
+	var units []parse.SourceUnit
+	var rules []ast.Clause
+	var places []site
+	prefix := "machinery_fired_"
+	for _, file := range files {
+		text, ok := w[file]
+		if !ok {
+			return nil, fmt.Errorf("%s is not in the world", file)
 		}
-		var lines []string
-		for _, l := range text[from-1 : to] {
-			lines = append(lines, strings.TrimSuffix(l, "\r"))
+		for strings.Contains(text, prefix) {
+			prefix = "machinery_" + prefix
 		}
-		out = append(out, strings.Join(lines, "\n"))
-	}
-	return out, nil
-}
-
-type clauseAt struct {
-	path, line string
-}
-
-type sourceClause struct {
-	at  clauseAt
-	key string
-}
-
-func firingKey(c ast.Clause) string {
-	var b strings.Builder
-	b.WriteString(c.Head.String())
-	if c.Transform != nil && !c.Transform.IsLetTransform() {
-		b.WriteString(" |> ")
-		b.WriteString(c.Transform.String())
-		return b.String()
-	}
-	for _, p := range c.Premises {
-		b.WriteString(" \x00 ")
-		b.WriteString(p.String())
-	}
-	if c.Transform != nil {
-		b.WriteString(" |> ")
-		b.WriteString(c.Transform.String())
-	}
-	return b.String()
-}
-
-type firings map[string]bool
-
-func (f firings) RuleFired(rule ast.Clause, _ ast.Atom, _ unionfind.UnionFind, _ []ast.Atom) {
-	f[firingKey(rule)] = true
-}
-
-func (f firings) LetEmit(rule ast.Clause, _ ast.Atom, _ ast.ConstSubstList, _ ast.Atom) {
-	f[firingKey(rule)] = true
-}
-
-func (f firings) DoEmit(rule ast.Clause, _ ast.Atom, _ []ast.Constant, _ []ast.Atom, _ ast.Atom) {
-	f[firingKey(rule)] = true
-}
-
-func analyze(programs []program) (*analysis.ProgramInfo, []sourceClause, error) {
-	pkgs := map[string]*packages.Package{}
-	members := map[string][]int{}
-	var order []string
-	for i, p := range programs {
-		pkg, err := packages.Extract(p.unit)
+		unit, err := parse.Unit(strings.NewReader(text))
 		if err != nil {
-			return nil, nil, err
+			return nil, fmt.Errorf("%s does not parse: %w", file, err)
 		}
-		if have, ok := pkgs[pkg.Name]; ok {
-			if err := have.Merge(pkg); err != nil {
-				return nil, nil, err
-			}
-		} else {
-			pkgs[pkg.Name] = &pkg
-			order = append(order, pkg.Name)
-		}
-		members[pkg.Name] = append(members[pkg.Name], i)
-	}
-	var decls []ast.Decl
-	var clauses []ast.Clause
-	var at []clauseAt
-	for _, name := range order {
-		ds, err := pkgs[name].Decls()
-		if err != nil {
-			return nil, nil, err
-		}
-		cs, err := pkgs[name].Clauses()
-		if err != nil {
-			return nil, nil, err
-		}
-		decls = append(decls, ds...)
-		clauses = append(clauses, cs...)
-		for _, i := range members[name] {
-			for _, line := range programs[i].lines {
-				at = append(at, clauseAt{programs[i].path, line})
-			}
-		}
-	}
-	if len(at) != len(clauses) {
-		return nil, nil, fmt.Errorf("found %d clauses on %d lines", len(clauses), len(at))
-	}
-	analyzer, err := analysis.New(nil, decls, analysis.NoBoundsChecking)
-	if err != nil {
-		return nil, nil, err
-	}
-	info, err := analyzer.Analyze(clauses)
-	if err != nil {
-		return nil, nil, err
-	}
-	sources := make([]sourceClause, 0, len(clauses))
-	rule := 0
-	for i, c := range clauses {
-		s := sourceClause{at: at[i]}
-		if c.Premises != nil {
-			if rule == len(info.Rules) {
-				return nil, nil, fmt.Errorf("found more rules than the analysis kept")
-			}
-			s.key = firingKey(info.Rules[rule])
-			rule++
-		}
-		sources = append(sources, s)
-	}
-	if rule != len(info.Rules) {
-		return nil, nil, fmt.Errorf("the analysis kept %d rules, found %d", len(info.Rules), rule)
-	}
-	return info, sources, nil
-}
-
-func compile(programs []program) (evaluator, error) {
-	var names []string
-	for _, p := range programs {
-		names = append(names, p.path)
-	}
-	what := strings.Join(names, " with ")
-	info, sources, err := analyze(programs)
-	if err != nil {
-		return nil, fmt.Errorf("analyzing %s: %w", what, err)
-	}
-	strata, predToStratum, err := analysis.Stratify(analysis.Program{
-		EdbPredicates: info.EdbPredicates,
-		IdbPredicates: info.IdbPredicates,
-		Rules:         info.Rules,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("stratifying %s: %w", what, err)
-	}
-	return func(in []ast.Atom) (factstore.FactStore, []ast.Atom, error) {
-		store := factstore.NewSimpleInMemoryStore()
-		for _, a := range in {
-			store.Add(a)
-		}
-		seen := firings{}
-		if _, err := engine.EvalStratifiedProgramWithStats(info, strata, predToStratum, store, engine.WithDerivationRecorder(seen)); err != nil {
-			return nil, nil, err
-		}
-		var fired []ast.Atom
-		told := map[clauseAt]bool{}
-		for _, s := range sources {
-			if told[s.at] || (s.key != "" && !seen[s.key]) {
+		for i, clause := range unit.Clauses {
+			place := site{file, i + 1}
+			if len(clause.Premises) == 0 && clause.Transform == nil {
+				p.facts = append(p.facts, place)
 				continue
 			}
-			told[s.at] = true
-			fired = append(fired, ast.NewAtom(firedSym.Symbol, ast.String(s.at.path), ast.String(s.at.line)))
+			rules = append(rules, clause)
+			places = append(places, place)
 		}
-		return store, fired, nil
-	}, nil
+		units = append(units, unit)
+	}
+	var markers []ast.Clause
+	for i, rule := range rules {
+		name := fmt.Sprintf("%s%d", prefix, i)
+		p.markers[name] = places[i]
+		markers = append(markers, ast.Clause{
+			Head:     ast.NewAtom(name),
+			Premises: append([]ast.Term(nil), rule.Premises...),
+		})
+	}
+	first := units[0]
+	units[0] = parse.SourceUnit{
+		Decls:   first.Decls,
+		Clauses: append(append([]ast.Clause(nil), first.Clauses...), markers...),
+	}
+	info, err := analysis.Analyze(units, nil)
+	if err != nil {
+		return nil, fmt.Errorf("the program does not hold together: %w", err)
+	}
+	p.info = info
+	return p, nil
 }
 
-func settle(eval evaluator, got []ast.Atom) (factstore.FactStore, []ast.Atom, error) {
-	_, fired, err := eval(got)
-	if err != nil {
-		return nil, nil, err
+func evaluate(p *program, given []ast.Atom) (factstore.FactStore, error) {
+	store := factstore.NewSimpleInMemoryStore()
+	for _, atom := range given {
+		store.Add(atom)
 	}
-	known := map[string]bool{}
-	for _, f := range fired {
-		known[f.String()] = true
+	if err := engine.EvalProgram(p.info, store); err != nil {
+		return nil, fmt.Errorf("the program does not evaluate: %w", err)
 	}
-	for {
-		store, more, err := eval(append(slices.Clone(got), fired...))
-		if err != nil {
-			return nil, nil, err
-		}
-		grew := false
-		for _, f := range more {
-			if !known[f.String()] {
-				known[f.String()] = true
-				fired = append(fired, f)
-				grew = true
-			}
-		}
-		if !grew {
-			return store, fired, nil
-		}
-	}
+	return store, nil
 }
 
-func run(path, entry string) (int, error) {
-	m := &machine{entry: entry}
-	o, err := m.outcome(path)
-	if err != nil {
-		return 0, err
-	}
-	var out []string
-	for _, a := range o.told {
-		out = append(out, a.String()+".")
-	}
-	sort.Strings(out)
-	for _, l := range out {
-		fmt.Println(l)
-	}
-	return o.code, nil
-}
-
-func (m *machine) outcome(path string) (outcome, error) {
-	program := filepath.Clean(path)
-	m.dir, m.program = filepath.Dir(program), filepath.Base(program)
-	store, fired, err := m.execute(program)
-	if err != nil {
-		return outcome{}, err
-	}
-	var told []ast.Atom
-	for _, o := range facts(store, outputSym) {
-		if format := str(o[1]); format != "mangle" {
-			return outcome{}, fmt.Errorf("cannot write %s in %q", str(o[0]), format)
-		}
-		told = append(told, factsNamed(store, str(o[0]))...)
-	}
-	code, err := exitCode(store)
-	if err != nil {
-		return outcome{}, err
-	}
-	return outcome{code: code, told: told, fired: fired}, nil
-}
-
-func (m *machine) given() []ast.Atom {
-	var out []ast.Atom
-	for _, s := range m.startedBy {
-		out = append(out, ast.NewAtom(startedSym.Symbol, ast.String(s)))
-	}
-	return out
-}
-
-func exitCode(store factstore.FactStore) (int, error) {
-	answers := facts(store, answerSym)
-	if len(answers) != 1 {
-		return 0, fmt.Errorf("needs exactly one answer, found %d", len(answers))
-	}
-	var codes []ast.Constant
-	for _, e := range facts(store, exitCodeSym) {
-		if e[0].Equals(answers[0][0]) {
-			codes = append(codes, e[1])
-		}
-	}
-	if len(codes) != 1 {
-		return 0, fmt.Errorf("answer %s needs exactly one exit code, found %d", show(answers[0][0]), len(codes))
-	}
-	code, err := codes[0].NumberValue()
-	if err != nil || code < 0 || code > 255 {
-		return 0, fmt.Errorf("answer %s has exit code %v, not a number from 0 to 255", show(answers[0][0]), codes[0])
-	}
-	return int(code), nil
-}
-
-func (m *machine) execute(path string) (factstore.FactStore, []ast.Atom, error) {
-	universe, err := parseFile(path)
-	if err != nil {
-		return nil, nil, err
-	}
-	universe.path = m.program
-	programs := []program{universe}
-	eval, err := compile(programs)
-	if err != nil {
-		return nil, nil, err
-	}
-	store, _, err := eval(m.given())
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var wanted []string
-	for _, f := range facts(store, machineSym) {
-		wanted = append(wanted, str(f[0]))
-	}
-	sort.Strings(wanted)
-	for _, name := range wanted {
-		p, err := parseFile(m.at(name))
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, nil, err
-		}
-		p.path = m.rel(name)
-		programs = append(programs, p)
-		m.programs = append(m.programs, name)
-	}
-	if len(m.programs) > 0 {
-		if eval, err = compile(programs); err != nil {
-			return nil, nil, err
-		}
-	}
-
-	got := m.given()
-	done := map[string]bool{}
-	var fired []ast.Atom
-	for round := 0; ; round++ {
-		if round == maxRounds {
-			return nil, nil, fmt.Errorf("still asking for new effects after %d rounds", maxRounds)
-		}
-		if store, fired, err = settle(eval, got); err != nil {
-			return nil, nil, err
-		}
-		var todo []ast.Constant
-		for _, d := range facts(store, doesSym) {
-			if !done[d[0].String()] {
-				todo = append(todo, d[0])
-			}
-		}
-		if len(todo) == 0 {
-			break
-		}
-		sort.Slice(todo, func(i, j int) bool { return todo[i].String() < todo[j].String() })
-		for _, doing := range todo {
-			done[doing.String()] = true
-			out, err := perform(store, m, doing)
-			if err != nil {
-				return nil, nil, fmt.Errorf("does(%v): %w", doing, err)
-			}
-			for _, r := range out {
-				got = append(got, ast.NewAtom(gotSym.Symbol, doing, ast.String(r.field), r.value))
-			}
-		}
-		got = append(got, m.firedInCases...)
-		m.firedInCases = nil
-	}
-	return store, fired, nil
-}
-
-func factsNamed(store factstore.FactStore, name string) []ast.Atom {
-	var out []ast.Atom
+func factsNamed(store factstore.FactStore, name string, arity int) []ast.Atom {
+	var atoms []ast.Atom
 	for _, pred := range store.ListPredicates() {
-		if pred.Symbol != name {
+		if pred.Symbol != name || (arity >= 0 && pred.Arity != arity) {
 			continue
 		}
-		store.GetFacts(ast.NewQuery(pred), func(a ast.Atom) error {
-			out = append(out, a)
+		store.GetFacts(ast.NewQuery(pred), func(atom ast.Atom) error {
+			atoms = append(atoms, atom)
 			return nil
 		})
 	}
-	return out
+	sort.Slice(atoms, func(i, j int) bool { return atoms[i].String() < atoms[j].String() })
+	return atoms
 }
 
-func linkedVersion() string {
-	linked := ""
-	if bi, ok := debug.ReadBuildInfo(); ok {
-		for _, dep := range bi.Deps {
-			if dep.Path == mangleModule {
-				linked = dep.Version
-				if dep.Replace != nil {
-					linked = dep.Replace.Version
+func constantOf(term ast.BaseTerm) ast.Constant {
+	c, _ := term.(ast.Constant)
+	return c
+}
+
+func stringOf(term ast.BaseTerm) (string, error) {
+	return constantOf(term).StringValue()
+}
+
+func listOf(c ast.Constant) []ast.Constant {
+	var items []ast.Constant
+	c.ListValues(func(item ast.Constant) error {
+		items = append(items, item)
+		return nil
+	}, func() error { return nil })
+	return items
+}
+
+func firedIn(p *program, store factstore.FactStore) []site {
+	fired := append([]site(nil), p.facts...)
+	for name, place := range p.markers {
+		if store.Contains(ast.NewAtom(name)) {
+			fired = append(fired, place)
+		}
+	}
+	sort.Slice(fired, func(i, j int) bool {
+		if fired[i].path != fired[j].path {
+			return fired[i].path < fired[j].path
+		}
+		return fired[i].number < fired[j].number
+	})
+	return fired
+}
+
+func broken(err error) outcome {
+	return outcome{code: brokenCode, err: err}
+}
+
+func run(w world, start string, startedBy []string) outcome {
+	files := []string{start}
+	var given []ast.Atom
+	for _, effect := range startedBy {
+		given = append(given, ast.NewAtom("started_by", ast.String(effect)))
+	}
+	done := map[string]bool{}
+	var traced []ast.Atom
+	seen := map[string]bool{}
+	for {
+		p, err := load(w, files)
+		if err != nil {
+			return broken(err)
+		}
+		store, err := evaluate(p, append(append([]ast.Atom(nil), given...), traced...))
+		if err != nil {
+			return broken(err)
+		}
+		more, err := programsOf(store, w, files)
+		if err != nil {
+			return broken(err)
+		}
+		if len(more) > len(files) {
+			files = more
+			continue
+		}
+		steps, err := asked(store)
+		if err != nil {
+			return broken(err)
+		}
+		var now, traces []step
+		for _, s := range steps {
+			if s.kind == "trace" {
+				traces = append(traces, s)
+			} else if !done[s.key] {
+				now = append(now, s)
+			}
+		}
+		if len(now) > 0 {
+			got, err := perform(now, w, start, p, store)
+			if err != nil {
+				return broken(err)
+			}
+			for _, s := range now {
+				done[s.key] = true
+			}
+			given = append(given, got...)
+			continue
+		}
+		got, err := perform(traces, w, start, p, store)
+		if err != nil {
+			return broken(err)
+		}
+		mark := fingerprint(got)
+		if mark == fingerprint(traced) {
+			return finish(p, store)
+		}
+		if seen[mark] {
+			return broken(errors.New("the trace of the world never settles"))
+		}
+		seen[mark] = true
+		traced = got
+	}
+}
+
+func fingerprint(atoms []ast.Atom) string {
+	var lines []string
+	for _, atom := range atoms {
+		lines = append(lines, atom.String())
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
+}
+
+func programsOf(store factstore.FactStore, w world, files []string) ([]string, error) {
+	known := map[string]bool{}
+	for _, file := range files {
+		known[file] = true
+	}
+	more := append([]string(nil), files...)
+	for _, atom := range factsNamed(store, "machine_program", 1) {
+		path, err := stringOf(atom.Args[0])
+		if err != nil {
+			return nil, fmt.Errorf("a machine program is not named by a string: %v", atom)
+		}
+		if _, ok := w[path]; ok && !known[path] {
+			known[path] = true
+			more = append(more, path)
+		}
+	}
+	return more, nil
+}
+
+func asked(store factstore.FactStore) ([]step, error) {
+	kindsOf := map[string][]string{}
+	for _, atom := range factsNamed(store, "effect", 2) {
+		effect, err1 := stringOf(atom.Args[0])
+		kind, err2 := stringOf(atom.Args[1])
+		if err1 != nil || err2 != nil {
+			return nil, fmt.Errorf("an effect is not named by strings: %v", atom)
+		}
+		kindsOf[effect] = append(kindsOf[effect], kind)
+	}
+	gives := map[string]map[string][]ast.Constant{}
+	for _, atom := range factsNamed(store, "gives", 3) {
+		key := constantOf(atom.Args[0]).String()
+		field, err := stringOf(atom.Args[1])
+		if err != nil {
+			return nil, fmt.Errorf("a field is not named by a string: %v", atom)
+		}
+		if gives[key] == nil {
+			gives[key] = map[string][]ast.Constant{}
+		}
+		gives[key][field] = append(gives[key][field], constantOf(atom.Args[2]))
+	}
+	steps := map[string]*step{}
+	var keys []string
+	for _, atom := range factsNamed(store, "does", 2) {
+		doing := constantOf(atom.Args[0])
+		key := doing.String()
+		effect, err := stringOf(atom.Args[1])
+		if err != nil {
+			return nil, fmt.Errorf("an effect is not named by a string: %v", atom)
+		}
+		if s, ok := steps[key]; ok {
+			if s.effect != effect {
+				return nil, fmt.Errorf("%s is asked to be done as %q and as %q", key, s.effect, effect)
+			}
+			continue
+		}
+		ks := kindsOf[effect]
+		if len(ks) != 1 || !kinds[ks[0]] {
+			return nil, fmt.Errorf("the effect %q is not one the machinery can have: %v", effect, ks)
+		}
+		steps[key] = &step{key: key, doing: doing, effect: effect, kind: ks[0], gives: gives[key]}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var ordered []step
+	for _, key := range keys {
+		ordered = append(ordered, *steps[key])
+	}
+	return ordered, nil
+}
+
+func perform(steps []step, w world, start string, p *program, store factstore.FactStore) ([]ast.Atom, error) {
+	results := make([][]ast.Atom, len(steps))
+	failures := make([]error, len(steps))
+	var wg sync.WaitGroup
+	for i, s := range steps {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i], failures[i] = do(s, w, start, p, store)
+		}()
+	}
+	wg.Wait()
+	var got []ast.Atom
+	for i := range steps {
+		if failures[i] != nil {
+			return nil, failures[i]
+		}
+		got = append(got, results[i]...)
+	}
+	return got, nil
+}
+
+func (s step) one(field string) (string, error) {
+	values := s.gives[field]
+	if len(values) != 1 {
+		return "", fmt.Errorf("%s needs exactly one %q, it was given %d", s.key, field, len(values))
+	}
+	value, err := values[0].StringValue()
+	if err != nil {
+		return "", fmt.Errorf("%s needs %q to be a string", s.key, field)
+	}
+	return value, nil
+}
+
+func do(s step, w world, start string, p *program, store factstore.FactStore) ([]ast.Atom, error) {
+	var got []ast.Atom
+	give := func(field string, value ast.Constant) {
+		got = append(got, ast.NewAtom("got", s.doing, ast.String(field), value))
+	}
+	switch s.kind {
+	case "list":
+		for _, path := range w.paths() {
+			give("file", ast.String(path))
+		}
+	case "read":
+		path, err := s.one("path")
+		if err != nil {
+			return nil, err
+		}
+		content, ok := w[path]
+		if !ok {
+			return nil, nil
+		}
+		lines := linesOf(content)
+		for i, line := range lines {
+			give("line", ast.List([]ast.Constant{ast.Number(int64(i + 1)), ast.String(line)}))
+		}
+		give("lines", ast.Number(int64(len(lines))))
+	case "parse":
+		path, err := s.one("path")
+		if err != nil {
+			return nil, err
+		}
+		content, ok := w[path]
+		if !ok {
+			return nil, nil
+		}
+		unit, lines, err := parseText(content)
+		if err != nil {
+			return nil, nil
+		}
+		for i, clause := range unit.Clauses {
+			number := ast.Number(int64(i + 1))
+			line := ast.Number(int64(lines[i]))
+			give("clause", ast.List([]ast.Constant{number, line, ast.String(clause.Head.Predicate.Symbol)}))
+			for j, arg := range clause.Head.Args {
+				if c, ok := arg.(ast.Constant); ok {
+					give("argument", ast.List([]ast.Constant{number, ast.Number(int64(j + 1)), c}))
 				}
 			}
 		}
-	}
-	return linked
-}
-
-func effectsOf(store factstore.FactStore, doing ast.Constant) []string {
-	var kinds []string
-	for _, e := range facts(store, effectSym) {
-		if e[0].Equals(doing) {
-			kinds = append(kinds, str(e[1]))
-		}
-	}
-	return kinds
-}
-
-func perform(store factstore.FactStore, m *machine, doing ast.Constant) ([]result, error) {
-	kinds := effectsOf(store, doing)
-	if len(kinds) != 1 {
-		return nil, fmt.Errorf("needs exactly one effect, found %d %v", len(kinds), kinds)
-	}
-	do, ok := effects[kinds[0]]
-	if !ok {
-		known := make([]string, 0, len(effects))
-		for k := range effects {
-			known = append(known, k)
-		}
-		sort.Strings(known)
-		return nil, fmt.Errorf("unknown effect %q (known: %s)", kinds[0], strings.Join(known, ", "))
-	}
-	in := map[string][]ast.Constant{}
-	for _, g := range facts(store, givesSym) {
-		if g[0].Equals(doing) {
-			field := str(g[1])
-			in[field] = append(in[field], g[2])
-		}
-	}
-	return do(m, in)
-}
-
-func onlyString(effect, field string, in map[string][]ast.Constant) (string, error) {
-	values := in[field]
-	if len(values) != 1 {
-		return "", fmt.Errorf("%s needs exactly one %q, got %d", effect, field, len(values))
-	}
-	s, err := values[0].StringValue()
-	if err != nil {
-		return "", fmt.Errorf("%s: %s must be a string: %w", effect, field, err)
-	}
-	return s, nil
-}
-
-func listAFolder(m *machine, in map[string][]ast.Constant) ([]result, error) {
-	folder, err := onlyString("list_a_folder", "folder", in)
-	if err != nil {
-		return nil, err
-	}
-	at := m.at(folder)
-	entries, err := os.ReadDir(at)
-	if err != nil {
-		return nil, err
-	}
-	var out []result
-	for _, e := range entries {
-		fi, err := os.Stat(filepath.Join(at, e.Name()))
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
+	case "start":
+		var additions [][2]string
+		for _, value := range s.gives["adds"] {
+			items := listOf(value)
+			if len(items) != 2 {
+				return nil, fmt.Errorf("%s adds something that is not a path and a line: %v", s.key, value)
 			}
-			return nil, err
-		}
-		if fi.IsDir() {
-			continue
-		}
-		out = append(out, result{"file", ast.String(filepath.Join(folder, e.Name()))})
-	}
-	return out, nil
-}
-
-func findComments(m *machine, in map[string][]ast.Constant) ([]result, error) {
-	path, err := onlyString("find_comments", "path", in)
-	if err != nil {
-		return nil, err
-	}
-	lang, err := onlyString("find_comments", "language", in)
-	if err != nil {
-		return nil, err
-	}
-	find, ok := commentFinders[lang]
-	if !ok {
-		return nil, fmt.Errorf("find_comments knows no comments in %q", lang)
-	}
-	at := m.at(path)
-	src, err := os.ReadFile(at)
-	if err != nil {
-		return nil, err
-	}
-	comments, err := find(at, src)
-	if err != nil {
-		return nil, fmt.Errorf("find_comments in %s: %w", path, err)
-	}
-	out := []result{{"syntax", ast.String(lang)}}
-	for _, c := range comments {
-		out = append(out, result{"comment", ast.String(c)})
-	}
-	return out, nil
-}
-
-func readAProgram(m *machine, in map[string][]ast.Constant) ([]result, error) {
-	path, err := onlyString("read_a_program", "path", in)
-	if err != nil {
-		return nil, err
-	}
-	prog, err := parseFile(m.at(path))
-	if err != nil {
-		return nil, err
-	}
-	lawsIn := map[string]bool{}
-	for _, c := range in["laws_in"] {
-		lawsIn[str(c)] = true
-	}
-	var out []result
-	seen := map[string]bool{}
-	for i, c := range prog.unit.Clauses {
-		name := c.Head.Predicate.Symbol
-		if !seen["defines\x00"+name] {
-			seen["defines\x00"+name] = true
-			out = append(out, result{"defines", ast.String(name)})
-		}
-		if line := prog.lines[i]; !seen["clause\x00"+line] {
-			seen["clause\x00"+line] = true
-			out = append(out, result{"clause", ast.String(line)})
-		}
-		if !lawsIn[name] || len(c.Head.Args) == 0 {
-			continue
-		}
-		law, ok := c.Head.Args[0].(ast.Constant)
-		if !ok || seen["law\x00"+law.String()] {
-			continue
-		}
-		seen["law\x00"+law.String()] = true
-		out = append(out, result{"law", law})
-	}
-	return out, nil
-}
-
-func readLines(m *machine, in map[string][]ast.Constant) ([]result, error) {
-	path, err := onlyString("read_lines", "path", in)
-	if err != nil {
-		return nil, err
-	}
-	src, err := os.ReadFile(m.at(path))
-	if err != nil {
-		return nil, err
-	}
-	if len(src) == 0 {
-		return nil, nil
-	}
-	var out []result
-	for _, line := range strings.Split(strings.TrimSuffix(string(src), "\n"), "\n") {
-		out = append(out, result{"line", ast.String(strings.TrimSuffix(line, "\r"))})
-	}
-	return out, nil
-}
-
-func knowTheMachine(m *machine, in map[string][]ast.Constant) ([]result, error) {
-	out := []result{
-		{"mangle_module", ast.String(mangleModule)},
-		{"exits_broken_with", ast.Number(brokenExit)},
-	}
-	if v := linkedVersion(); v != "" {
-		out = append(out, result{"mangle_version", ast.String(v)})
-	}
-	if m.entry != "" {
-		out = append(out, result{"entry_point", ast.String(m.entry)})
-	}
-	for _, p := range m.programs {
-		out = append(out, result{"machine_program", ast.String(p)})
-	}
-	for _, s := range m.startedBy {
-		out = append(out, result{"started_by", ast.String(s)})
-	}
-	return out, nil
-}
-
-func runACase(m *machine, in map[string][]ast.Constant) ([]result, error) {
-	if slices.Contains(m.startedBy, runACaseFx) {
-		return nil, fmt.Errorf("%s cannot start inside a case", runACaseFx)
-	}
-	tmp, err := os.MkdirTemp("", "universe-case-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(tmp)
-	if err := m.copyFolder(tmp); err != nil {
-		return nil, err
-	}
-	paths := make([]string, 0, len(in))
-	for p := range in {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	for _, p := range paths {
-		if !filepath.IsLocal(p) {
-			return nil, fmt.Errorf("%s cannot add lines to %q, which is outside the folder", runACaseFx, p)
-		}
-		var lines []string
-		for _, c := range in[p] {
-			line, err := c.StringValue()
-			if err != nil {
-				return nil, fmt.Errorf("%s: a line for %s must be a string: %w", runACaseFx, p, err)
+			path, err1 := items[0].StringValue()
+			line, err2 := items[1].StringValue()
+			if err1 != nil || err2 != nil {
+				return nil, fmt.Errorf("%s adds something that is not a path and a line: %v", s.key, value)
 			}
-			lines = append(lines, line)
+			additions = append(additions, [2]string{path, line})
 		}
-		sort.Strings(lines)
-		if err := addLines(filepath.Join(tmp, p), lines); err != nil {
-			return nil, err
-		}
-	}
-	inner := &machine{entry: m.entry, startedBy: append(slices.Clone(m.startedBy), runACaseFx)}
-	o, err := inner.outcome(filepath.Join(tmp, m.program))
-	if err != nil {
-		return []result{{"exit", ast.Number(brokenExit)}}, nil
-	}
-	for _, f := range o.fired {
-		m.firedInCases = append(m.firedInCases, ast.NewAtom(firedInCaseSym.Symbol, f.Args...))
-	}
-	out := []result{{"exit", ast.Number(int64(o.code))}}
-	seen := map[string]bool{}
-	for _, a := range o.told {
-		if len(a.Args) == 0 {
-			continue
-		}
-		c, ok := a.Args[0].(ast.Constant)
-		if !ok {
-			continue
-		}
-		key := a.Predicate.Symbol + "\x00" + c.String()
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, result{a.Predicate.Symbol, c})
-	}
-	return out, nil
-}
-
-func (m *machine) copyFolder(to string) error {
-	entries, err := os.ReadDir(m.dir)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		from := filepath.Join(m.dir, e.Name())
-		fi, err := os.Stat(from)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
+		sort.Slice(additions, func(i, j int) bool {
+			if additions[i][0] != additions[j][0] {
+				return additions[i][0] < additions[j][0]
 			}
-			return err
+			return additions[i][1] < additions[j][1]
+		})
+		o := run(w.with(additions), start, []string{s.effect})
+		give("exit code", ast.Number(int64(o.code)))
+		for _, atom := range o.outputs {
+			fact := []ast.Constant{ast.String(atom.Predicate.Symbol)}
+			for _, arg := range atom.Args {
+				fact = append(fact, constantOf(arg))
+			}
+			give("output", ast.List(fact))
 		}
-		if !fi.Mode().IsRegular() {
+		for _, place := range o.fired {
+			give("fired", ast.List([]ast.Constant{ast.String(place.path), ast.Number(int64(place.number))}))
+		}
+	case "trace":
+		for _, place := range firedIn(p, store) {
+			give("fired", ast.List([]ast.Constant{ast.String(place.path), ast.Number(int64(place.number))}))
+		}
+	}
+	return got, nil
+}
+
+func finish(p *program, store factstore.FactStore) outcome {
+	answers := factsNamed(store, "answer", 1)
+	if len(answers) != 1 {
+		return broken(fmt.Errorf("the world gives %d answers", len(answers)))
+	}
+	answer := constantOf(answers[0].Args[0])
+	var codes []int64
+	for _, atom := range factsNamed(store, "exit_code", 2) {
+		if !constantOf(atom.Args[0]).Equals(answer) {
 			continue
 		}
-		src, err := os.ReadFile(from)
+		code, err := constantOf(atom.Args[1]).NumberValue()
 		if err != nil {
-			return err
+			return broken(fmt.Errorf("the exit code of %v is not a number", answer))
 		}
-		if err := os.WriteFile(filepath.Join(to, e.Name()), src, fi.Mode().Perm()); err != nil {
-			return err
+		codes = append(codes, code)
+	}
+	if len(codes) != 1 {
+		return broken(fmt.Errorf("the answer %v has %d exit codes", answer, len(codes)))
+	}
+	var outputs []ast.Atom
+	for _, atom := range factsNamed(store, "output", 2) {
+		name, err1 := stringOf(atom.Args[0])
+		format, err2 := stringOf(atom.Args[1])
+		if err1 != nil || err2 != nil || format != "mangle" {
+			return broken(fmt.Errorf("the machinery cannot give the output %v", atom))
 		}
+		outputs = append(outputs, factsNamed(store, name, -1)...)
 	}
-	return nil
-}
-
-func addLines(path string, lines []string) error {
-	src, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if len(src) > 0 && !bytes.HasSuffix(src, []byte("\n")) {
-		src = append(src, '\n')
-	}
-	for _, l := range lines {
-		src = append(append(src, l...), '\n')
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, src, 0o644)
-}
-
-type lexErrors struct {
-	*antlr.DefaultErrorListener
-	errs []string
-}
-
-func (l *lexErrors) SyntaxError(_ antlr.Recognizer, _ any, line, column int, msg string, _ antlr.RecognitionException) {
-	l.errs = append(l.errs, fmt.Sprintf("%d:%d: %s", line, column, msg))
-}
-
-func mangleComments(_ string, src []byte) ([]string, error) {
-	lexer := gen.NewMangleLexer(antlr.NewInputStream(string(src)))
-	lexer.RemoveErrorListeners()
-	errs := &lexErrors{DefaultErrorListener: antlr.NewDefaultErrorListener()}
-	lexer.AddErrorListener(errs)
-	var out []string
-	for tok := lexer.NextToken(); tok.GetTokenType() != antlr.TokenEOF; tok = lexer.NextToken() {
-		if tok.GetTokenType() == gen.MangleLexerCOMMENT {
-			out = append(out, tok.GetText())
-		}
-	}
-	if len(errs.errs) > 0 {
-		return nil, errors.New(strings.Join(errs.errs, "; "))
-	}
-	return out, nil
-}
-
-func goComments(name string, src []byte) ([]string, error) {
-	fset := token.NewFileSet()
-	var errs scanner.ErrorList
-	var s scanner.Scanner
-	s.Init(fset.AddFile(name, -1, len(src)), src, errs.Add, scanner.ScanComments)
-	var out []string
-	for {
-		_, tok, lit := s.Scan()
-		if tok == token.EOF {
-			break
-		}
-		if tok == token.COMMENT {
-			out = append(out, lit)
-		}
-	}
-	if err := errs.Err(); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func shellComments(name string, src []byte) ([]string, error) {
-	f, err := syntax.NewParser(syntax.KeepComments(true), syntax.Variant(syntax.LangPOSIX)).Parse(bytes.NewReader(src), name)
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	syntax.Walk(f, func(n syntax.Node) bool {
-		if c, ok := n.(*syntax.Comment); ok {
-			out = append(out, "#"+c.Text)
-		}
-		return true
-	})
-	return out, nil
-}
-
-func facts(store factstore.FactStore, pred ast.PredicateSym) [][]ast.Constant {
-	var out [][]ast.Constant
-	store.GetFacts(ast.NewQuery(pred), func(a ast.Atom) error {
-		args := make([]ast.Constant, len(a.Args))
-		for i, t := range a.Args {
-			args[i], _ = t.(ast.Constant)
-		}
-		out = append(out, args)
-		return nil
-	})
-	return out
-}
-
-func str(c ast.Constant) string {
-	if s, err := c.StringValue(); err == nil {
-		return s
-	}
-	return c.Symbol
-}
-
-func show(c ast.Constant) string {
-	if c.Type == ast.StringType {
-		return c.Symbol
-	}
-	return c.String()
+	sort.Slice(outputs, func(i, j int) bool { return outputs[i].String() < outputs[j].String() })
+	return outcome{code: int(codes[0]), outputs: outputs, fired: firedIn(p, store)}
 }
