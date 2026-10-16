@@ -1,7 +1,7 @@
+#!/bin/sh
 cd "$(dirname "$0")" || exit
-machine="$(mktemp -d)" || exit
-go build -o "$machine/engine" . || exit
-"$machine/engine" spec.mg "$@"
+place=$(mktemp -d) || exit
+go build -o "$place/machine" . && "$place/machine" spec.mg
 answer=$?
-rm -rf "$machine"
+rm -rf "$place"
 exit "$answer"

@@ -1,383 +1,524 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
+	"html/template"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"codeberg.org/TauCeti/mangle-go/ast"
+	"codeberg.org/TauCeti/mangle-go/factstore"
 )
 
-type concept struct {
-	Name    string   `json:"name"`
-	Rules   []string `json:"rules"`
-	Changes []string `json:"changes"`
+type note struct {
+	Word    string
+	Pattern string
+	Finding bool
+	Values  []string
 }
 
-type table struct {
-	Name string  `json:"name"`
-	Rows [][]any `json:"rows"`
+type shownRule struct {
+	Text  template.HTML
+	Notes []note
+}
+
+type shownChange struct {
+	Name  string
+	Notes []note
+}
+
+type shownConcept struct {
+	ID      string
+	Name    string
+	Flagged bool
+	Notes   []note
+	Rules   []shownRule
+	Changes []shownChange
+}
+
+type shownWord struct {
+	ID    string
+	Name  string
+	Notes []note
+	Rules []shownRule
+}
+
+type shownOutput struct {
+	Word  string
+	Facts []string
+	Open  bool
 }
 
 type page struct {
-	Answer    string              `json:"answer"`
-	Problems  []string            `json:"problems"`
-	Concepts  []concept           `json:"concepts"`
-	OpensInto map[string][]string `json:"opensInto"`
-	Explained map[string][]string `json:"explained"`
-	Outputs   []table             `json:"outputs"`
+	Title    string
+	Answer   string
+	Code     int
+	Good     bool
+	Problems []string
+	Language string
+	Rounds   int
+	Concepts []shownConcept
+	Words    []shownWord
+	Outputs  []shownOutput
+	Rules    int
 }
 
-func plain(c ast.Constant) any {
-	switch c.Type {
-	case ast.StringType:
-		s, _ := c.StringValue()
-		return s
-	case ast.NumberType:
-		n, _ := c.NumberValue()
-		return n
-	case ast.PairShape:
-		fst, snd, _ := c.PairValue()
-		return []any{plain(fst), plain(snd)}
-	case ast.ListShape:
-		items := []any{}
-		if seq, err := c.ListSeq(); err == nil {
-			for item := range seq {
-				items = append(items, plain(item))
+type reader struct {
+	store  factstore.FactStore
+	about  map[string][]ast.Atom
+	wordID map[string]string
+	opens  map[string]map[string]bool
+	headOf map[string]string
+}
+
+var structure = map[string]bool{"shows": true, "shows_change": true, "opens_into": true, "explained_by": true}
+
+func writeReport(o outcome) (string, error) {
+	if o.store == nil {
+		return "", nil
+	}
+	r := &reader{store: o.store, about: map[string][]ast.Atom{}, wordID: map[string]string{}, opens: map[string]map[string]bool{}, headOf: map[string]string{}}
+	targets := r.texts("output_file", 1, 0)
+	if len(targets) == 0 {
+		return "", nil
+	}
+	languages := r.texts("printed_in", 1, 0)
+	if len(languages) == 0 {
+		return "", fmt.Errorf("the program does not say what language to print in")
+	}
+	for _, l := range languages {
+		if l != "mangle" {
+			return "", fmt.Errorf("cannot print in %s", l)
+		}
+	}
+	p := page{
+		Title:    folderName(o.dir),
+		Answer:   o.answer,
+		Code:     o.code,
+		Good:     o.code == 0,
+		Problems: o.problems,
+		Language: strings.Join(languages, ", "),
+		Rounds:   o.rounds,
+	}
+	outputs := r.texts("output", 1, 0)
+	for _, w := range outputs {
+		facts := r.factsOf(w)
+		var printed []string
+		for _, f := range facts {
+			printed = append(printed, f.String()+".")
+			if structure[w] {
+				continue
+			}
+			seen := map[string]bool{}
+			for _, arg := range f.Args {
+				k := key(arg)
+				if !seen[k] {
+					seen[k] = true
+					r.about[k] = append(r.about[k], f)
+				}
 			}
 		}
-		return items
+		sort.Strings(printed)
+		p.Outputs = append(p.Outputs, shownOutput{Word: w, Facts: printed, Open: len(printed) > 0 && len(printed) <= 12})
 	}
-	return c.String()
-}
-
-func (r *run) outputs() []table {
-	tables := []table{}
-	for _, name := range r.full.column("output") {
-		t := table{Name: name, Rows: [][]any{}}
-		for _, row := range r.full.facts(name) {
-			cells := make([]any, len(row))
-			for i, c := range row {
-				cells[i] = plain(c)
-			}
-			t.Rows = append(t.Rows, cells)
+	for _, f := range r.pairs("opens_into") {
+		if r.opens[f[0]] == nil {
+			r.opens[f[0]] = map[string]bool{}
 		}
-		tables = append(tables, t)
+		r.opens[f[0]][f[1]] = true
 	}
-	return tables
+	explained := map[string][]string{}
+	for _, f := range r.pairs("explained_by") {
+		explained[f[0]] = append(explained[f[0]], f[1])
+		r.headOf[f[1]] = f[0]
+		if r.opens[f[1]] == nil {
+			r.opens[f[1]] = map[string]bool{}
+		}
+		r.opens[f[1]][f[0]] = true
+	}
+	words := keys(explained)
+	for i, w := range words {
+		r.wordID[w] = fmt.Sprintf("w%d", i+1)
+	}
+	allRules := map[string]bool{}
+	for _, w := range words {
+		sw := shownWord{ID: r.wordID[w], Name: w, Notes: r.notes(w, nil)}
+		for _, rule := range sorted(explained[w]) {
+			sw.Rules = append(sw.Rules, r.rule(rule))
+			allRules[rule] = true
+		}
+		p.Words = append(p.Words, sw)
+	}
+	shows := map[string][]string{}
+	for _, f := range r.pairs("shows") {
+		shows[f[0]] = append(shows[f[0]], f[1])
+	}
+	changes := map[string][]string{}
+	for _, f := range r.pairs("shows_change") {
+		changes[f[0]] = append(changes[f[0]], f[1])
+	}
+	names := map[string]bool{}
+	for k := range shows {
+		names[k] = true
+	}
+	for k := range changes {
+		names[k] = true
+	}
+	for i, c := range keys(names) {
+		heads := map[string]bool{}
+		for _, rule := range shows[c] {
+			heads[r.headOf[rule]] = true
+		}
+		sc := shownConcept{ID: fmt.Sprintf("c%d", i+1), Name: c, Notes: r.notes(c, heads)}
+		for _, n := range sc.Notes {
+			sc.Flagged = sc.Flagged || n.Finding
+		}
+		for _, rule := range sorted(shows[c]) {
+			sc.Rules = append(sc.Rules, r.rule(rule))
+			allRules[rule] = true
+		}
+		for _, ch := range sorted(changes[c]) {
+			sc.Changes = append(sc.Changes, shownChange{Name: ch, Notes: r.notes(ch, nil)})
+		}
+		p.Concepts = append(p.Concepts, sc)
+	}
+	sort.SliceStable(p.Concepts, func(i, j int) bool {
+		return p.Concepts[i].Flagged && !p.Concepts[j].Flagged
+	})
+	p.Rules = len(allRules)
+	var b strings.Builder
+	if err := pageTemplate.Execute(&b, p); err != nil {
+		return "", err
+	}
+	var written []string
+	for _, t := range targets {
+		if !filepath.IsLocal(t) {
+			return "", fmt.Errorf("%s is outside the folder", t)
+		}
+		full := filepath.Join(o.dir, filepath.FromSlash(t))
+		if err := os.WriteFile(full, []byte(b.String()), 0o644); err != nil {
+			return "", err
+		}
+		written = append(written, t)
+	}
+	return strings.Join(written, ", "), nil
 }
 
-func (r *run) pairs(name string) map[string][]string {
-	out := map[string][]string{}
-	for _, row := range r.full.facts(name) {
-		if len(row) != 2 {
+func folderName(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return dir
+	}
+	return filepath.Base(abs)
+}
+
+func key(t ast.BaseTerm) string {
+	if c, ok := t.(ast.Constant); ok {
+		if s, err := c.StringValue(); err == nil {
+			return s
+		}
+	}
+	return t.String()
+}
+
+func (r *reader) factsOf(word string) []ast.Atom {
+	var facts []ast.Atom
+	for _, sym := range r.store.ListPredicates() {
+		if sym.Symbol != word {
 			continue
 		}
-		key, err1 := text(row[0])
-		value, err2 := text(row[1])
-		if err1 == nil && err2 == nil {
-			out[key] = append(out[key], value)
-		}
+		r.store.GetFacts(ast.NewQuery(sym), func(a ast.Atom) error {
+			facts = append(facts, a)
+			return nil
+		})
 	}
+	return facts
+}
+
+func (r *reader) texts(word string, arity, at int) []string {
+	seen := map[string]bool{}
+	r.store.GetFacts(ast.NewQuery(ast.PredicateSym{Symbol: word, Arity: arity}), func(a ast.Atom) error {
+		seen[key(a.Args[at])] = true
+		return nil
+	})
+	return keys(seen)
+}
+
+func (r *reader) pairs(word string) [][2]string {
+	var out [][2]string
+	r.store.GetFacts(ast.NewQuery(ast.PredicateSym{Symbol: word, Arity: 2}), func(a ast.Atom) error {
+		out = append(out, [2]string{key(a.Args[0]), key(a.Args[1])})
+		return nil
+	})
 	return out
 }
 
-func (r *run) page() page {
-	p := page{
-		Answer:    r.answer,
-		Problems:  append([]string{}, r.problems...),
-		Concepts:  []concept{},
-		OpensInto: r.pairs("opens_into"),
-		Explained: r.pairs("explained_by"),
-		Outputs:   r.outputs(),
+func (r *reader) notes(item string, findings map[string]bool) []note {
+	type place struct {
+		word  string
+		at    int
+		arity int
 	}
-	shows, changes := r.pairs("shows"), r.pairs("shows_change")
-	names := map[string]bool{}
-	for name := range shows {
-		names[name] = true
-	}
-	for name := range changes {
-		names[name] = true
-	}
-	for name := range names {
-		p.Concepts = append(p.Concepts, concept{name, append([]string{}, shows[name]...), append([]string{}, changes[name]...)})
-	}
-	sort.Slice(p.Concepts, func(i, j int) bool { return p.Concepts[i].Name < p.Concepts[j].Name })
-	return p
-}
-
-var printers = map[string]func(r *run) string{
-	"json":   (*run).inJSON,
-	"mangle": (*run).inMangle,
-}
-
-func (m *model) printer() (func(r *run) string, error) {
-	languages := m.column("printed_in")
-	switch {
-	case len(languages) == 0:
-		return (*run).inJSON, nil
-	case len(languages) > 1:
-		return (*run).inJSON, fmt.Errorf("the spec asks for the output printed in %d languages instead of one: %v", len(languages), languages)
-	}
-	say, ok := printers[languages[0]]
-	if !ok {
-		return (*run).inJSON, fmt.Errorf("there is no way to print the output in %s", languages[0])
-	}
-	return say, nil
-}
-
-func (r *run) inJSON() string {
-	compact := func(v any) string {
-		b, _ := json.Marshal(v)
-		return string(b)
-	}
-	var said strings.Builder
-	fmt.Fprintf(&said, "{\n  \"answer\": %s,\n  \"problems\": %s,\n  \"facts\": {", compact(r.answer), compact(append([]string{}, r.problems...)))
-	if r.answer != "broken" {
-		for i, t := range r.outputs() {
-			if i > 0 {
-				said.WriteString(",")
+	grouped := map[place][]string{}
+	for _, f := range r.about[item] {
+		if len(f.Args) < 2 {
+			continue
+		}
+		for at, arg := range f.Args {
+			if key(arg) != item {
+				continue
 			}
-			fmt.Fprintf(&said, "\n    %s: [", compact(t.Name))
-			for j, row := range t.Rows {
-				if j > 0 {
-					said.WriteString(",")
+			var others []string
+			for k, other := range f.Args {
+				if k != at {
+					others = append(others, key(other))
 				}
-				said.WriteString("\n      " + compact(row))
 			}
-			if len(t.Rows) > 0 {
-				said.WriteString("\n    ")
+			pl := place{f.Predicate.Symbol, at, len(f.Args)}
+			grouped[pl] = append(grouped[pl], strings.Join(others, " · "))
+		}
+	}
+	var out []note
+	for pl, values := range grouped {
+		args := make([]string, pl.arity)
+		for k := range args {
+			args[k] = "…"
+		}
+		args[pl.at] = "this"
+		out = append(out, note{
+			Word:    pl.word,
+			Pattern: "(" + strings.Join(args, ", ") + ")",
+			Finding: findings[pl.word] && pl.at == 0,
+			Values:  sorted(values),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Finding != out[j].Finding {
+			return out[i].Finding
+		}
+		if out[i].Word != out[j].Word {
+			return out[i].Word < out[j].Word
+		}
+		return out[i].Pattern < out[j].Pattern
+	})
+	return out
+}
+
+func (r *reader) rule(text string) shownRule {
+	return shownRule{Text: r.linked(text), Notes: r.notes(text, nil)}
+}
+
+func (r *reader) linked(text string) template.HTML {
+	links := r.opens[text]
+	var b strings.Builder
+	esc := template.HTMLEscapeString
+	for i := 0; i < len(text); {
+		c := text[i]
+		if c == '"' || c == '\'' || c == '`' {
+			j := i + 1
+			for j < len(text) && text[j] != c {
+				if text[j] == '\\' && c != '`' {
+					j++
+				}
+				j++
 			}
-			said.WriteString("]")
-		}
-		said.WriteString("\n  ")
-	}
-	said.WriteString("}\n}\n")
-	return said.String()
-}
-
-func mangle(c ast.Constant) string {
-	if s, err := text(c); err == nil {
-		return ast.String(strings.ToValidUTF8(s, "\uFFFD")).String()
-	}
-	return c.String()
-}
-
-func (r *run) inMangle() string {
-	var said strings.Builder
-	fact := func(name string, args ...ast.Constant) {
-		parts := make([]string, len(args))
-		for i, arg := range args {
-			parts[i] = mangle(arg)
-		}
-		fmt.Fprintf(&said, "%s(%s).\n", name, strings.Join(parts, ", "))
-	}
-	fact("answer", ast.String(r.answer))
-	for _, problem := range r.problems {
-		fact("problem", ast.String(problem))
-	}
-	if r.answer != "broken" {
-		for _, name := range r.full.column("output") {
-			said.WriteString("\n")
-			for _, row := range r.full.facts(name) {
-				fact(name, row...)
+			if j < len(text) {
+				j++
 			}
+			b.WriteString(`<span class="s">` + esc(text[i:j]) + `</span>`)
+			i = j
+			continue
 		}
+		if isLower(c) && (i == 0 || !isIdent(text[i-1]) && text[i-1] != ':') {
+			j := i
+			for j < len(text) && isIdent(text[j]) {
+				j++
+			}
+			name := text[i:j]
+			if j < len(text) && text[j] == '(' && links[name] {
+				if id, ok := r.wordID[name]; ok {
+					b.WriteString(`<a class="word" href="#` + id + `" data-target="` + id + `">` + esc(name) + `</a>`)
+				} else {
+					b.WriteString(`<span class="word plain">` + esc(name) + `</span>`)
+				}
+			} else {
+				b.WriteString(esc(name))
+			}
+			i = j
+			continue
+		}
+		b.WriteString(esc(string(c)))
+		i++
 	}
-	return said.String()
+	return template.HTML(b.String())
 }
 
-func (r *run) tell() {
-	best := r.full
-	if best == nil {
-		best = r.stated
-	}
-	say, err := best.printer()
-	if err != nil {
-		r.fail("%v", err)
-		r.answer = "broken"
-	}
-	fmt.Print(say(r))
-	for _, problem := range r.problems {
-		fmt.Fprintln(os.Stderr, problem)
-	}
-	files := best.column("output_file")
-	if len(files) == 0 {
-		fmt.Fprintln(os.Stderr, "the spec names no output file, so no report was written")
-		return
-	}
-	shown := r
-	if r.answer == "broken" {
-		shown = &run{answer: r.answer, problems: r.problems}
-	}
-	data, err := json.Marshal(shown.page())
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return
-	}
-	html := strings.Replace(reportPage, "DATA", string(data), 1)
-	for _, file := range files {
-		if err := os.WriteFile(filepath.Join(r.folder, file), []byte(html), 0o644); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
-	}
+func isLower(c byte) bool { return c >= 'a' && c <= 'z' }
+
+func isIdent(c byte) bool {
+	return isLower(c) || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
 }
 
-const reportPage = `<!doctype html>
+func keys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sorted(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Spec Check</title>
+<title>{{.Title}} conformance</title>
 <style>
 :root {
   --bg: #f7f6f2; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a64; --line: #e3e1d9;
-  --code-bg: #f1efe8; --chip: #ebe8de; --chip-ink: #3a3933;
-  --good: #1f7a4a; --good-bg: #e2f3e9; --bad: #b3261e; --bad-bg: #fbe5e3; --warn: #8a5a00; --warn-bg: #fbefd6;
-  --accent: #3355aa;
+  --code-bg: #f1efe8; --accent: #2f5d8a; --good: #2e7d4f; --good-bg: #e6f3eb;
+  --bad: #b3261e; --bad-bg: #fbe9e7; --string: #7a4f12; --chip: #eeece5;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #161614; --panel: #1f1f1c; --ink: #ecebe6; --muted: #a09f97; --line: #34332e;
-    --code-bg: #2a2a26; --chip: #33322d; --chip-ink: #e2e0d8;
-    --good: #6fd09a; --good-bg: #183526; --bad: #ff8a80; --bad-bg: #3d1b18; --warn: #f0c060; --warn-bg: #3a2e12;
-    --accent: #8fa8ff;
+    --bg: #161614; --panel: #1f1f1c; --ink: #ecebe6; --muted: #a09e95; --line: #34332e;
+    --code-bg: #262622; --accent: #8fb8e0; --good: #7fd19f; --good-bg: #1d3226;
+    --bad: #f2a29b; --bad-bg: #3a2120; --string: #e2b77a; --chip: #2c2b27;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #161614; --panel: #1f1f1c; --ink: #ecebe6; --muted: #a09f97; --line: #34332e;
-  --code-bg: #2a2a26; --chip: #33322d; --chip-ink: #e2e0d8;
-  --good: #6fd09a; --good-bg: #183526; --bad: #ff8a80; --bad-bg: #3d1b18; --warn: #f0c060; --warn-bg: #3a2e12;
-  --accent: #8fa8ff;
+  --bg: #161614; --panel: #1f1f1c; --ink: #ecebe6; --muted: #a09e95; --line: #34332e;
+  --code-bg: #262622; --accent: #8fb8e0; --good: #7fd19f; --good-bg: #1d3226;
+  --bad: #f2a29b; --bad-bg: #3a2120; --string: #e2b77a; --chip: #2c2b27;
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
-main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 64px; }
-h1 { font-size: 26px; margin: 0 0 6px; }
-h2 { font-size: 19px; margin: 40px 0 12px; }
-h3 { font-size: 16px; margin: 0 0 10px; }
-.lede { color: var(--muted); margin: 0 0 20px; }
-.answer { display: inline-flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 10px; font-weight: 600; font-size: 17px; }
-.answer.true { background: var(--good-bg); color: var(--good); }
-.answer.false { background: var(--bad-bg); color: var(--bad); }
-.answer.broken { background: var(--warn-bg); color: var(--warn); }
-.problems { margin: 16px 0 0; padding-left: 20px; color: var(--warn); }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin: 0 0 14px; }
-.label { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 12px 0 6px; }
-.rule { margin: 6px 0; }
-code, .code { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-.code { display: block; background: var(--code-bg); border-radius: 8px; padding: 8px 10px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
-.words { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 0; }
-button.word { border: 1px solid var(--line); background: var(--chip); color: var(--chip-ink); border-radius: 999px; padding: 2px 10px; font: 12px ui-monospace, Menlo, monospace; cursor: pointer; }
-button.word[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
-.nest { margin: 8px 0 4px 14px; padding-left: 12px; border-left: 2px solid var(--line); }
-.empty { color: var(--muted); font-style: italic; font-size: 13px; }
-ul.changes { margin: 0; padding-left: 18px; }
-ul.changes li { margin: 4px 0; }
-.mention { color: var(--muted); font-size: 13px; }
-.table-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; margin: 0 0 14px; }
-table { border-collapse: collapse; width: 100%; font-size: 13px; }
-caption { text-align: left; padding: 12px 14px 4px; font-weight: 600; }
-th, td { text-align: left; padding: 6px 14px; border-top: 1px solid var(--line); vertical-align: top; }
-td { font-family: ui-monospace, Menlo, monospace; word-break: break-word; }
-td.num { text-align: right; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; }
+header { margin-bottom: 28px; }
+h1 { font-size: 26px; margin: 0 0 10px; letter-spacing: -0.01em; }
+h2 { font-size: 18px; margin: 36px 0 6px; }
+h3 { font-size: 15px; margin: 0; }
+p.lead { color: var(--muted); margin: 0 0 14px; }
+.verdict { display: inline-flex; gap: 10px; align-items: center; padding: 8px 14px; border-radius: 8px; font-weight: 600; }
+.verdict.good { background: var(--good-bg); color: var(--good); }
+.verdict.bad { background: var(--bad-bg); color: var(--bad); }
+.facts-line { color: var(--muted); font-size: 13px; margin-top: 10px; }
+.problems { background: var(--bad-bg); color: var(--bad); border-radius: 8px; padding: 10px 14px; margin-top: 14px; }
+.problems li { margin: 2px 0; }
+nav.toc { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 0; }
+nav.toc a { color: var(--accent); text-decoration: none; font-size: 14px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+.card.flagged { border-color: var(--bad); }
+.card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; margin: 12px 0 4px; }
+.rule { background: var(--code-bg); border-radius: 6px; padding: 8px 10px; margin: 6px 0; }
+.rule code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; display: block; }
+.rule .s { color: var(--string); }
+a.word { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); cursor: pointer; }
+a.word.on { background: var(--accent); color: var(--panel); border-radius: 3px; border-bottom: none; }
+.notes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.chip { background: var(--chip); border-radius: 6px; padding: 2px 8px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.chip b { color: var(--ink); font-weight: 600; }
+.chip.finding { background: var(--bad-bg); color: var(--bad); }
+.chip.finding b { color: var(--bad); }
+.opened { border-left: 3px solid var(--accent); margin: 8px 0 2px 4px; padding: 2px 0 2px 10px; }
+.opened-head { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.change { padding: 6px 0; border-top: 1px dashed var(--line); }
+.change:first-of-type { border-top: none; }
+details { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; margin: 8px 0; }
+summary { cursor: pointer; padding: 10px 14px; font-weight: 600; }
+summary span { color: var(--muted); font-weight: 400; margin-left: 6px; }
+details pre { margin: 0; padding: 0 14px 12px; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.word-card h3 { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.empty { color: var(--muted); font-style: italic; }
 </style>
 </head>
 <body>
 <main>
-<h1>Spec check</h1>
-<p class="lede">What the folder says about itself, read from the outputs the spec names.</p>
-<div id="answer"></div>
-<ul class="problems" id="problems"></ul>
-<h2>Concepts</h2>
-<div id="concepts"></div>
-<h2>Outputs</h2>
-<div id="outputs"></div>
+<header>
+  <h1>{{.Title}}</h1>
+  <p class="lead">What the folder's own program concluded, every rule printed in {{.Language}}.</p>
+  <div class="verdict {{if .Good}}good{{else}}bad{{end}}">conforms: {{if .Answer}}{{.Answer}}{{else}}unknown{{end}} <span>· exit {{.Code}}</span></div>
+  <div class="facts-line">{{len .Concepts}} concepts · {{len .Words}} words · {{.Rules}} rules shown{{if .Rounds}} · settled in {{.Rounds}} rounds{{end}}</div>
+  {{if .Problems}}<ul class="problems">{{range .Problems}}<li>{{.}}</li>{{end}}</ul>{{end}}
+  <nav class="toc"><a href="#concepts">Concepts</a><a href="#words">Words</a><a href="#outputs">Outputs</a></nav>
+</header>
+
+<h2 id="concepts">Concepts</h2>
+<p class="lead">Each concept with the rules that show it and the changes that test it. Click a word in a rule to open the rules that explain it.</p>
+{{range .Concepts}}
+<section class="card{{if .Flagged}} flagged{{end}}" id="{{.ID}}">
+  <h3>{{.Name}}</h3>
+  {{if .Notes}}<div class="notes">{{range .Notes}}<span class="chip{{if .Finding}} finding{{end}}"><b>{{.Word}}</b>{{.Pattern}} {{range $i, $v := .Values}}{{if $i}}, {{end}}{{$v}}{{end}}</span>{{end}}</div>{{end}}
+  {{if .Rules}}<div class="label">Shown by</div>{{range .Rules}}{{template "rule" .}}{{end}}{{end}}
+  {{if .Changes}}<div class="label">Tested by</div>
+  {{range .Changes}}<div class="change"><div>{{.Name}}</div>{{if .Notes}}<div class="notes">{{range .Notes}}<span class="chip{{if .Finding}} finding{{end}}"><b>{{.Word}}</b>{{.Pattern}} {{range $i, $v := .Values}}{{if $i}}, {{end}}{{$v}}{{end}}</span>{{end}}</div>{{end}}</div>{{end}}{{end}}
+</section>
+{{else}}<p class="empty">No concepts were shown.</p>
+{{end}}
+
+<h2 id="words">Words</h2>
+<p class="lead">Every word that a rule defines, with the rules that explain it.</p>
+{{range .Words}}
+<section class="card word-card" id="{{.ID}}">
+  <h3>{{.Name}}</h3>
+  {{if .Notes}}<div class="notes">{{range .Notes}}<span class="chip{{if .Finding}} finding{{end}}"><b>{{.Word}}</b>{{.Pattern}} {{range $i, $v := .Values}}{{if $i}}, {{end}}{{$v}}{{end}}</span>{{end}}</div>{{end}}
+  <div class="rules">{{range .Rules}}{{template "rule" .}}{{end}}</div>
+</section>
+{{else}}<p class="empty">No words were explained.</p>
+{{end}}
+
+<h2 id="outputs">Outputs</h2>
+<p class="lead">Every fact of every output word, printed in {{.Language}}.</p>
+{{range .Outputs}}
+<details{{if .Open}} open{{end}}><summary>{{.Word}}<span>{{len .Facts}}</span></summary>{{if .Facts}}<pre>{{range .Facts}}{{.}}
+{{end}}</pre>{{else}}<pre class="empty">none</pre>{{end}}</details>
+{{end}}
 </main>
 <script>
-const data = DATA;
-const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
-const cell = v => Array.isArray(v) ? v.map(cell).join(" → ") : String(v);
-
-const answer = el("div", "answer " + data.answer, "conforms: " + data.answer);
-document.getElementById("answer").appendChild(answer);
-for (const p of data.problems || []) document.getElementById("problems").appendChild(el("li", "", p));
-
-function ruleBlock(rule) {
-  const box = el("div", "rule");
-  box.appendChild(el("code", "code", rule));
-  const words = data.opensInto[rule] || [];
-  if (!words.length) return box;
-  const row = el("div", "words");
-  const nest = el("div");
-  for (const word of words) {
-    const b = el("button", "word", word);
-    b.type = "button";
-    b.setAttribute("aria-expanded", "false");
-    let open = null;
-    b.addEventListener("click", () => {
-      if (open) { open.remove(); open = null; b.setAttribute("aria-expanded", "false"); return; }
-      open = el("div", "nest");
-      const rules = data.explained[word] || [];
-      if (!rules.length) open.appendChild(el("div", "empty", word + " has no rules here: its facts come from outside the rules."));
-      for (const r of rules) open.appendChild(ruleBlock(r));
-      nest.appendChild(open);
-      b.setAttribute("aria-expanded", "true");
-    });
-    row.appendChild(b);
+document.addEventListener('click', function (e) {
+  var a = e.target.closest('a.word');
+  if (!a) return;
+  var section = document.getElementById(a.dataset.target);
+  var host = a.closest('.rule');
+  if (!section || !host) return;
+  e.preventDefault();
+  var key = a.dataset.target;
+  var open = null;
+  for (var i = 0; i < host.children.length; i++) {
+    var c = host.children[i];
+    if (c.classList.contains('opened') && c.dataset.key === key) open = c;
   }
-  box.appendChild(row);
-  box.appendChild(nest);
-  return box;
-}
-
-function mentions(value) {
-  const out = [];
-  for (const t of data.outputs) for (const row of t.rows) if (row.some(v => v === value)) out.push(t.name + "(" + row.map(cell).join(", ") + ")");
-  return out;
-}
-
-const concepts = document.getElementById("concepts");
-if (!data.concepts.length) concepts.appendChild(el("p", "empty", "No concepts to show."));
-for (const c of data.concepts) {
-  const card = el("section", "card");
-  card.appendChild(el("h3", "", c.name));
-  const seen = mentions(c.name);
-  if (seen.length) { card.appendChild(el("div", "label", "In the outputs")); for (const m of seen) card.appendChild(el("div", "mention", m)); }
-  card.appendChild(el("div", "label", "Shown by"));
-  if (!c.rules.length) card.appendChild(el("div", "empty", "No rule shows this."));
-  for (const r of c.rules) card.appendChild(ruleBlock(r));
-  card.appendChild(el("div", "label", "Changes that should show it"));
-  if (!c.changes.length) card.appendChild(el("div", "empty", "No change."));
-  const ul = el("ul", "changes");
-  for (const ch of c.changes) {
-    const li = el("li", "", ch);
-    for (const m of mentions(ch)) { li.appendChild(document.createElement("br")); li.appendChild(el("span", "mention", m)); }
-    ul.appendChild(li);
-  }
-  card.appendChild(ul);
-  concepts.appendChild(card);
-}
-
-const outputs = document.getElementById("outputs");
-if (!data.outputs.length) outputs.appendChild(el("p", "empty", "No outputs."));
-for (const t of data.outputs) {
-  const wrap = el("div", "table-wrap");
-  const table = el("table");
-  table.appendChild(el("caption", "", t.name + " (" + t.rows.length + ")"));
-  for (const row of t.rows) {
-    const tr = el("tr");
-    for (const v of row) tr.appendChild(el("td", typeof v === "number" ? "num" : "", cell(v)));
-    table.appendChild(tr);
-  }
-  if (!t.rows.length) { const tr = el("tr"); tr.appendChild(el("td", "empty", "none")); table.appendChild(tr); }
-  wrap.appendChild(table);
-  outputs.appendChild(wrap);
-}
+  if (open) { open.remove(); a.classList.remove('on'); return; }
+  open = document.createElement('div');
+  open.className = 'opened';
+  open.dataset.key = key;
+  var head = document.createElement('div');
+  head.className = 'opened-head';
+  head.textContent = a.textContent + ' is explained by';
+  open.appendChild(head);
+  var rules = section.querySelector('.rules');
+  if (rules) open.appendChild(rules.cloneNode(true));
+  host.appendChild(open);
+  a.classList.add('on');
+});
 </script>
 </body>
 </html>
-`
+{{define "rule"}}<div class="rule"><code>{{.Text}}</code>{{if .Notes}}<div class="notes">{{range .Notes}}<span class="chip{{if .Finding}} finding{{end}}"><b>{{.Word}}</b>{{.Pattern}} {{range $i, $v := .Values}}{{if $i}}, {{end}}{{$v}}{{end}}</span>{{end}}</div>{{end}}</div>{{end}}
+`))

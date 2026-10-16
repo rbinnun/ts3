@@ -3,10 +3,8 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -15,283 +13,514 @@ import (
 	"codeberg.org/TauCeti/mangle-go/ast"
 	"codeberg.org/TauCeti/mangle-go/engine"
 	"codeberg.org/TauCeti/mangle-go/factstore"
+	"codeberg.org/TauCeti/mangle-go/functional"
 	"codeberg.org/TauCeti/mangle-go/parse"
 )
 
-const settleWithin = 50
+const (
+	brokenAnswer = "broken"
+	firedMark    = "engine_saw_fire"
+	maxRounds    = 64
+)
 
-type model struct {
-	info  *analysis.ProgramInfo
-	store factstore.FactStore
+type source struct {
+	path string
+	unit parse.SourceUnit
 }
 
-type run struct {
-	folder   string
-	spec     string
-	effects  []string
+type ruleAt struct {
+	path string
+	rule string
+}
+
+type outcome struct {
+	dir      string
+	store    factstore.FactStore
 	answer   string
+	code     int
 	problems []string
-	stated   *model
-	full     *model
+	rounds   int
+}
+
+type machine struct {
+	dir     string
+	spec    string
+	effect  string
+	sources []source
+	program *analysis.ProgramInfo
+	strata  []analysis.Nodeset
+	layers  map[ast.PredicateSym]int
+	marks   []ruleAt
+	facts   []ruleAt
+	missing []string
+
+	mu    sync.Mutex
+	fired map[string][]string
+	memo  map[string]result
+}
+
+type result struct {
+	findings []finding
+	err      error
 }
 
 func main() {
-	r := &run{folder: ".", answer: "broken"}
+	spec := ""
 	if len(os.Args) > 1 {
-		r.spec, r.effects = os.Args[1], os.Args[2:]
+		spec = os.Args[1]
 	}
-	r.check()
-	r.tell()
-	os.Exit(r.exitCode())
+	o := run(".", spec, "a command")
+	written, err := writeReport(o)
+	if err != nil {
+		o.problems = append(o.problems, "the report: "+err.Error())
+	}
+	for _, p := range o.problems {
+		fmt.Fprintln(os.Stderr, "problem:", p)
+	}
+	fmt.Printf("conforms: %s\n", o.answer)
+	if written != "" {
+		fmt.Printf("report: %s\n", written)
+	}
+	os.Exit(o.code)
 }
 
-func (r *run) fail(format string, args ...any) {
-	r.problems = append(r.problems, strings.TrimSpace(fmt.Sprintf(format, args...)))
+func run(dir, spec, effect string) outcome {
+	m := &machine{
+		dir:    dir,
+		spec:   spec,
+		effect: effect,
+		fired:  map[string][]string{},
+		memo:   map[string]result{},
+	}
+	if err := m.load(); err != nil {
+		return m.broken(err, nil)
+	}
+	return m.settle()
 }
 
-func (r *run) check() {
-	src, err := os.ReadFile(filepath.Join(r.folder, r.spec))
+func (m *machine) path(rel string) (string, error) {
+	if rel == "" {
+		return "", errors.New("no path given")
+	}
+	if !filepath.IsLocal(rel) && rel != "." {
+		return "", fmt.Errorf("%s is outside the folder", rel)
+	}
+	return filepath.Join(m.dir, filepath.FromSlash(rel)), nil
+}
+
+func (m *machine) read(rel string) (source, error) {
+	full, err := m.path(rel)
 	if err != nil {
-		r.fail("the spec cannot be read: %v", err)
-		return
+		return source{}, err
 	}
-	if info, err := analysis.Analyze([]parse.SourceUnit{salvage(string(src))}, nil); err == nil {
-		r.stated, _ = evaluate(info, nil)
-	}
-	spec, err := parse.Unit(strings.NewReader(string(src)))
+	data, err := os.ReadFile(full)
 	if err != nil {
-		r.fail("%s does not load: %v", r.spec, err)
-		return
+		return source{}, err
 	}
-	units := []parse.SourceUnit{spec}
-	for _, path := range r.stated.column("workflow") {
-		src, err := os.ReadFile(filepath.Join(r.folder, path))
-		if errors.Is(err, fs.ErrNotExist) {
+	unit, err := parse.Unit(strings.NewReader(string(data)))
+	if err != nil {
+		return source{}, fmt.Errorf("%s does not parse: %s", rel, strings.TrimSpace(err.Error()))
+	}
+	return source{path: rel, unit: unit}, nil
+}
+
+func (m *machine) load() error {
+	if m.spec == "" {
+		return errors.New("no spec was named")
+	}
+	spec, err := m.read(m.spec)
+	if err != nil {
+		return err
+	}
+	m.sources = []source{spec}
+	loaded := map[string]bool{filepath.Clean(m.spec): true}
+	for _, w := range m.workflows(spec.unit) {
+		full, err := m.path(w)
+		if err != nil {
+			m.missing = append(m.missing, fmt.Sprintf("workflow %s: %v", w, err))
 			continue
 		}
-		if err != nil {
-			r.fail("%s cannot be read: %v", path, err)
-			return
+		if loaded[filepath.Clean(w)] {
+			continue
 		}
-		unit, err := parse.Unit(strings.NewReader(string(src)))
-		if err != nil {
-			r.fail("%s does not load: %v", path, err)
-			return
+		loaded[filepath.Clean(w)] = true
+		if _, err := os.Stat(full); err != nil {
+			m.missing = append(m.missing, fmt.Sprintf("workflow %s is not in the folder", w))
+			continue
 		}
-		units = append(units, unit)
+		src, err := m.read(w)
+		if err != nil {
+			return err
+		}
+		m.sources = append(m.sources, src)
 	}
-	info, err := analysis.Analyze(units, nil)
+	return m.build()
+}
+
+func (m *machine) workflows(spec parse.SourceUnit) []string {
+	query := ast.NewQuery(ast.PredicateSym{Symbol: "workflow", Arity: 1})
+	var facts []ast.Atom
+	program, err := analysis.Analyze([]parse.SourceUnit{spec}, nil)
+	if err == nil {
+		var store factstore.FactStore
+		if store, err = evaluate(program, nil, nil, nil); err == nil {
+			store.GetFacts(query, func(a ast.Atom) error {
+				facts = append(facts, a)
+				return nil
+			})
+		}
+	}
 	if err != nil {
-		r.fail("the spec and its workflow do not load together: %v", err)
-		return
-	}
-	var started []ast.Atom
-	for _, effect := range r.effects {
-		started = append(started, ast.NewAtom("started_by", ast.String(effect)))
-	}
-	got := map[string]ast.Atom{}
-	done := map[string][]found{}
-	for round := 1; r.full == nil; round++ {
-		if round > settleWithin {
-			r.fail("the workflow did not settle within %d rounds", settleWithin)
-			return
+		for _, c := range spec.Clauses {
+			if len(c.Premises) == 0 && c.Head.Predicate == query.Predicate {
+				facts = append(facts, c.Head)
+			}
 		}
-		facts := append([]ast.Atom{}, started...)
-		for _, atom := range got {
-			facts = append(facts, atom)
-		}
-		m, err := evaluate(info, facts)
+	}
+	var paths []string
+	for _, a := range facts {
+		p, err := text(a.Args[0])
 		if err != nil {
-			r.fail("the rules cannot be followed: %v", err)
-			return
+			m.missing = append(m.missing, fmt.Sprintf("%s does not name a workflow file", a))
+			continue
 		}
-		next, ok := r.perform(m, done)
+		paths = append(paths, p)
+	}
+	return sorted(paths)
+}
+
+func (m *machine) build() error {
+	var units []parse.SourceUnit
+	var marks []ast.Clause
+	for _, src := range m.sources {
+		units = append(units, src.unit)
+		for _, c := range src.unit.Clauses {
+			at := ruleAt{path: src.path, rule: c.String()}
+			if len(c.Premises) == 0 {
+				m.facts = append(m.facts, at)
+				continue
+			}
+			premises := make([]ast.Term, len(c.Premises))
+			copy(premises, c.Premises)
+			head := ast.NewAtom(firedMark, ast.Number(int64(len(m.marks))))
+			marks = append(marks, ast.NewClause(head, premises))
+			m.marks = append(m.marks, at)
+		}
+	}
+	units = append(units, parse.SourceUnit{Clauses: marks})
+	program, err := analysis.Analyze(units, nil)
+	if err != nil {
+		return fmt.Errorf("the spec and its workflows do not make a program: %v", err)
+	}
+	strata, layers, err := analysis.Stratify(analysis.Program{
+		EdbPredicates: program.EdbPredicates,
+		IdbPredicates: program.IdbPredicates,
+		Rules:         program.Rules,
+	})
+	if err != nil {
+		return fmt.Errorf("the program cannot be layered: %v", err)
+	}
+	m.program, m.strata, m.layers = program, strata, layers
+	return nil
+}
+
+func evaluate(program *analysis.ProgramInfo, strata []analysis.Nodeset, layers map[ast.PredicateSym]int, given []ast.Atom) (store factstore.FactStore, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("evaluation failed: %v", r)
+		}
+	}()
+	if strata == nil {
+		strata, layers, err = analysis.Stratify(analysis.Program{
+			EdbPredicates: program.EdbPredicates,
+			IdbPredicates: program.IdbPredicates,
+			Rules:         program.Rules,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	store = factstore.NewSimpleInMemoryStore()
+	for _, a := range given {
+		store.Add(a)
+	}
+	_, err = engine.EvalStratifiedProgramWithStats(program, strata, layers, store)
+	return store, err
+}
+
+type step struct {
+	name  ast.Constant
+	tool  string
+	input ast.Constant
+}
+
+func (m *machine) settle() outcome {
+	got := map[string]ast.Atom{}
+	problems := map[string]bool{}
+	settled := false
+	for round := 1; ; round++ {
+		store, err := evaluate(m.program, m.strata, m.layers, m.given(got, problems))
+		if err != nil {
+			return m.broken(err, problems)
+		}
+		if settled {
+			return m.finish(store, problems, round)
+		}
+		m.see(store)
+		steps, stepProblems := m.steps(store)
+		nextGot, nextProblems := m.work(steps)
+		for p := range stepProblems {
+			nextProblems[p] = true
+		}
+		if sameAtoms(got, nextGot) && sameSet(problems, nextProblems) {
+			return m.finish(store, problems, round)
+		}
+		got, problems = nextGot, nextProblems
+		if round >= maxRounds {
+			problems[fmt.Sprintf("the workflow did not settle after %d rounds", maxRounds)] = true
+			settled = true
+		}
+	}
+}
+
+func (m *machine) given(got map[string]ast.Atom, problems map[string]bool) []ast.Atom {
+	atoms := []ast.Atom{ast.NewAtom("started_by", ast.String(m.effect))}
+	for _, p := range m.allProblems(problems) {
+		atoms = append(atoms, ast.NewAtom("problem", ast.String(p)))
+	}
+	for _, a := range got {
+		atoms = append(atoms, a)
+	}
+	return atoms
+}
+
+func (m *machine) allProblems(problems map[string]bool) []string {
+	all := append([]string{}, m.missing...)
+	for p := range problems {
+		all = append(all, p)
+	}
+	sort.Strings(all)
+	return all
+}
+
+func (m *machine) see(store factstore.FactStore) {
+	fired := map[string][]string{}
+	for _, f := range m.facts {
+		fired[f.path] = append(fired[f.path], f.rule)
+	}
+	store.GetFacts(ast.NewQuery(ast.PredicateSym{Symbol: firedMark, Arity: 1}), func(a ast.Atom) error {
+		c, ok := a.Args[0].(ast.Constant)
 		if !ok {
-			return
+			return nil
 		}
-		if sameFacts(next, got) {
-			r.full = m
+		n, err := c.NumberValue()
+		if err != nil || n < 0 || int(n) >= len(m.marks) {
+			return nil
 		}
-		got = next
-	}
-	answers := r.full.column("conforms")
-	if len(answers) != 1 {
-		r.fail("the spec gives %d answers instead of one: %v", len(answers), answers)
-		return
-	}
-	r.answer = answers[0]
+		at := m.marks[n]
+		fired[at.path] = append(fired[at.path], at.rule)
+		return nil
+	})
+	m.mu.Lock()
+	m.fired = fired
+	m.mu.Unlock()
 }
 
-func salvage(src string) parse.SourceUnit {
-	if unit, err := parse.Unit(strings.NewReader(src)); err == nil {
-		return unit
-	}
-	var kept []string
-	for _, c := range chunksOf(src) {
-		if _, err := parse.Unit(strings.NewReader(c.text)); err == nil {
-			kept = append(kept, c.text)
-		}
-	}
-	unit, _ := parse.Unit(strings.NewReader(strings.Join(kept, "\n")))
-	return unit
+func (m *machine) firedIn(path string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string{}, m.fired[path]...)
 }
 
-func evaluate(info *analysis.ProgramInfo, facts []ast.Atom) (*model, error) {
+func (m *machine) steps(store factstore.FactStore) ([]step, map[string]bool) {
+	var steps []step
+	problems := map[string]bool{}
+	store.GetFacts(ast.NewQuery(ast.PredicateSym{Symbol: "does", Arity: 3}), func(a ast.Atom) error {
+		name, _ := a.Args[0].(ast.Constant)
+		input, _ := a.Args[2].(ast.Constant)
+		tool, err := text(a.Args[1])
+		if err != nil {
+			problems[fmt.Sprintf("step %s names its tool with %s, which is not a name", name, a.Args[1])] = true
+			return nil
+		}
+		steps = append(steps, step{name: name, tool: tool, input: input})
+		return nil
+	})
+	return steps, problems
+}
+
+func (m *machine) work(steps []step) (map[string]ast.Atom, map[string]bool) {
+	got := map[string]ast.Atom{}
+	problems := map[string]bool{}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, 8)
+	for _, s := range steps {
+		wg.Add(1)
+		go func(s step) {
+			defer wg.Done()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			findings, err := m.use(s)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				problems[fmt.Sprintf("step %s: %v", s.name, err)] = true
+			}
+			for _, f := range findings {
+				a := ast.NewAtom("got", s.name, ast.String(f.field), f.value)
+				got[a.String()] = a
+			}
+		}(s)
+	}
+	wg.Wait()
+	return got, problems
+}
+
+func (m *machine) use(s step) (findings []finding, err error) {
+	t, ok := tools[s.tool]
+	if !ok {
+		return nil, fmt.Errorf("there is no tool called %q", s.tool)
+	}
+	key := s.tool + "\x00" + s.input.String()
+	if t.remembers {
+		m.mu.Lock()
+		r, done := m.memo[key]
+		m.mu.Unlock()
+		if done {
+			return r.findings, r.err
+		}
+	}
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("the tool %q failed: %v", s.tool, r)
+			}
+		}()
+		findings, err = t.use(m, s.input)
+	}()
+	if t.remembers {
+		m.mu.Lock()
+		m.memo[key] = result{findings, err}
+		m.mu.Unlock()
+	}
+	return findings, err
+}
+
+func (m *machine) finish(store factstore.FactStore, problems map[string]bool, rounds int) outcome {
+	o := outcome{dir: m.dir, store: store, problems: m.allProblems(problems), rounds: rounds}
+	var answers []string
+	store.GetFacts(ast.NewQuery(ast.PredicateSym{Symbol: "conforms", Arity: 1}), func(a ast.Atom) error {
+		if s, err := text(a.Args[0]); err == nil {
+			answers = append(answers, s)
+		}
+		return nil
+	})
+	sort.Strings(answers)
+	switch len(answers) {
+	case 1:
+		o.answer = answers[0]
+	case 0:
+		o.problems = append(o.problems, "the program does not say whether the folder conforms")
+	default:
+		o.problems = append(o.problems, "the program gives more than one answer: "+strings.Join(answers, ", "))
+	}
+	o.code = m.exitCode(&o)
+	return o
+}
+
+func (m *machine) broken(cause error, problems map[string]bool) outcome {
+	o := outcome{dir: m.dir, answer: brokenAnswer}
+	o.problems = append([]string{cause.Error()}, m.allProblems(problems)...)
 	store := factstore.NewSimpleInMemoryStore()
-	for _, fact := range facts {
-		store.Add(fact)
+	for _, f := range m.salvage() {
+		store.Add(f)
 	}
-	if err := engine.EvalProgram(info, store); err != nil {
-		return nil, err
+	for _, p := range o.problems {
+		store.Add(ast.NewAtom("problem", ast.String(p)))
 	}
-	return &model{info, store}, nil
+	o.store = store
+	o.code = m.exitCode(&o)
+	return o
 }
 
-func sameFacts(a, b map[string]ast.Atom) bool {
+func (m *machine) salvage() []ast.Atom {
+	full, err := m.path(m.spec)
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(full)
+	if err != nil {
+		return nil
+	}
+	var facts []ast.Atom
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		unit, err := parse.Unit(strings.NewReader(line))
+		if err != nil {
+			continue
+		}
+		for _, c := range unit.Clauses {
+			if len(c.Premises) != 0 || c.Transform != nil {
+				continue
+			}
+			f, err := functional.EvalAtom(c.Head, nil)
+			if err != nil || !f.IsGround() {
+				continue
+			}
+			facts = append(facts, f)
+		}
+	}
+	return facts
+}
+
+func (m *machine) exitCode(o *outcome) int {
+	code := -1
+	o.store.GetFacts(ast.NewAtom("exit_code", ast.String(o.answer), ast.Variable{Symbol: "Code"}), func(a ast.Atom) error {
+		if c, ok := a.Args[1].(ast.Constant); ok {
+			if n, err := c.NumberValue(); err == nil && code < 0 {
+				code = int(n)
+			}
+		}
+		return nil
+	})
+	if code < 0 {
+		o.problems = append(o.problems, fmt.Sprintf("the program gives no exit code for the answer %q", o.answer))
+		return 1
+	}
+	return code
+}
+
+func text(t ast.BaseTerm) (string, error) {
+	c, ok := t.(ast.Constant)
+	if !ok {
+		return "", fmt.Errorf("%v is not a constant", t)
+	}
+	return c.StringValue()
+}
+
+func sameAtoms(a, b map[string]ast.Atom) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	for key := range a {
-		if _, ok := b[key]; !ok {
+	for k := range a {
+		if _, ok := b[k]; !ok {
 			return false
 		}
 	}
 	return true
 }
 
-func (m *model) facts(name string) [][]ast.Constant {
-	if m == nil {
-		return nil
+func sameSet(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	var rows [][]ast.Constant
-	for sym := range m.info.Decls {
-		if sym.Symbol != name {
-			continue
-		}
-		m.store.GetFacts(ast.NewQuery(sym), func(a ast.Atom) error {
-			row := make([]ast.Constant, len(a.Args))
-			for i, arg := range a.Args {
-				row[i], _ = arg.(ast.Constant)
-			}
-			rows = append(rows, row)
-			return nil
-		})
-	}
-	key := func(row []ast.Constant) string {
-		parts := make([]string, len(row))
-		for i, c := range row {
-			parts[i] = c.String()
-		}
-		return strings.Join(parts, "\x00")
-	}
-	sort.Slice(rows, func(i, j int) bool { return key(rows[i]) < key(rows[j]) })
-	return rows
-}
-
-func (m *model) column(name string) []string {
-	var out []string
-	for _, row := range m.facts(name) {
-		if len(row) > 0 {
-			if s, err := text(row[0]); err == nil {
-				out = append(out, s)
-			}
+	for k := range a {
+		if !b[k] {
+			return false
 		}
 	}
-	return out
-}
-
-type step struct {
-	doing   ast.Constant
-	tool    string
-	input   ast.Constant
-	effects []string
-	key     string
-	results []found
-	err     error
-	ready   bool
-}
-
-func (r *run) perform(m *model, done map[string][]found) (map[string]ast.Atom, bool) {
-	gives := map[string]map[string]bool{}
-	for _, row := range m.facts("gives") {
-		tool, err1 := text(row[0])
-		field, err2 := text(row[1])
-		if err1 != nil || err2 != nil {
-			continue
-		}
-		if gives[tool] == nil {
-			gives[tool] = map[string]bool{}
-		}
-		gives[tool][field] = true
-	}
-	effects := map[string][]string{}
-	for _, row := range m.facts("effect") {
-		if effect, err := text(row[1]); err == nil {
-			effects[row[0].String()] = append(effects[row[0].String()], effect)
-		}
-	}
-	var steps []*step
-	for _, row := range m.facts("does") {
-		name, err := text(row[1])
-		if err != nil {
-			r.fail("%v is not the name of a tool", row[1])
-			return nil, false
-		}
-		t, ok := tools[name]
-		if !ok {
-			r.fail("no tool is called %q", name)
-			return nil, false
-		}
-		s := &step{doing: row[0], tool: name, input: row[2], effects: effects[row[0].String()]}
-		s.key = strings.Join(append([]string{name, row[2].String()}, s.effects...), "\x00")
-		if results, ok := done[s.key]; ok && !t.looksAtTheModel {
-			s.results, s.ready = results, true
-		}
-		steps = append(steps, s)
-	}
-	limit := make(chan struct{}, max(2, runtime.NumCPU()))
-	var wg sync.WaitGroup
-	for _, s := range steps {
-		if s.ready {
-			continue
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			limit <- struct{}{}
-			defer func() { <-limit }()
-			w := world{folder: r.folder, effects: s.effects, model: m.store, decls: m.info.Decls}
-			s.results, s.err = tools[s.tool].use(w, s.input)
-		}()
-	}
-	wg.Wait()
-	got := map[string]ast.Atom{}
-	for _, s := range steps {
-		if s.err != nil {
-			r.fail("%s (%s %v): %v", s.doing, s.tool, s.input, s.err)
-			continue
-		}
-		done[s.key] = s.results
-		for _, f := range s.results {
-			if gives[s.tool][f.field] {
-				atom := ast.NewAtom("got", s.doing, ast.String(f.field), f.value)
-				got[atom.String()] = atom
-			}
-		}
-	}
-	return got, len(r.problems) == 0
-}
-
-func (r *run) exitCode() int {
-	for _, m := range []*model{r.full, r.stated} {
-		for _, row := range m.facts("exit_code") {
-			if answer, err := text(row[0]); err == nil && answer == r.answer {
-				if code, err := row[1].NumberValue(); err == nil {
-					return int(code)
-				}
-			}
-		}
-	}
-	fmt.Fprintf(os.Stderr, "the spec does not say how to exit when the answer is %q\n", r.answer)
-	return 2
+	return true
 }
