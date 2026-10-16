@@ -2,9 +2,24 @@ mangle_module("codeberg.org/TauCeti/mangle-go").
 mangle_version("v0.7.0").
 entry_point("run.me").
 machine_program("machine.mg").
-code_ending(".go").
-module_ending("go.mod").
-module_ending("go.sum").
+
+written_in(".mg", "mangle").
+written_in(".go", "go").
+written_in("go.mod", "go module").
+written_in("go.sum", "go checksums").
+written_in(Entry, "sh") :- entry_point(Entry).
+has_comments("mangle").
+has_comments("go").
+has_comments("sh").
+
+supplied_by_the_machine("got").
+
+output("tells", "mangle").
+output("violation", "mangle").
+
+exit_code("true", 0).
+exit_code("false", 1).
+exit_code("broken", 2).
 
 Decl got(Doing, Field, Value).
 Decl about(Text, Requirement).
@@ -18,10 +33,6 @@ why("the_only_knowledge_is_datalog", "knowledge kept in code, comments or prose 
 why("the machinery", "every line of code is knowledge the world cannot read, so the machinery holds only what the spec needs").
 why("every_line_is_accounted_for", "a line with no path to what the world does is knowledge nobody uses; the account is a justification for the owner to read and judge, not a proof").
 why("every_requirement_has_a_reason", "a requirement without a reason cannot be judged: its why says what it means and why it is there").
-why("observations", "only the machine states got facts, from steps it actually ran; a got fact written into a program is a faked observation").
-why("decisions", "the machinery acts and Datalog decides: anything the machine decides about the world, such as which language a file is written in, belongs in Datalog where it can be read").
-why("the output", "what the world tells is knowledge too, so it comes out as valid Datalog that another world could load").
-why("the answer", "a world that is false and a machine that could not run are different answers, and the run says which").
 
 does("list the universe").
 effect("list the universe", "list_a_folder").
@@ -30,22 +41,25 @@ gives("list the universe", "folder", ".").
 universe_file(Path) :- got("list the universe", "file", Path).
 tells(Path) :- universe_file(Path).
 
-datalog(Path) :- universe_file(Path), :string:ends_with(Path, ".mg").
-code(Path) :- universe_file(Path), entry_point(Path).
-code(Path) :- universe_file(Path), code_ending(Ending), :string:ends_with(Path, Ending).
-machinery(Path) :- code(Path).
-machinery(Path) :- universe_file(Path), module_ending(Ending), :string:ends_with(Path, Ending).
+language(Path, Language) :- universe_file(Path), written_in(Ending, Language), :string:ends_with(Path, Ending).
+known(Path) :- language(Path, _).
+datalog(Path) :- language(Path, "mangle").
 
-read_for_comments(Path) :- datalog(Path).
-read_for_comments(Path) :- code(Path).
-
-finding_comments(Doing, Path) :- read_for_comments(Path), Doing = fn:string:concat("find comments in ", Path).
+finding_comments(Doing, Path) :- language(Path, Language), has_comments(Language), Doing = fn:string:concat("find comments in ", Path).
 does(Doing) :- finding_comments(Doing, _).
 effect(Doing, "find_comments") :- finding_comments(Doing, _).
 gives(Doing, "path", Path) :- finding_comments(Doing, Path).
+gives(Doing, "language", Language) :- finding_comments(Doing, Path), language(Path, Language).
 
-violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !datalog(Path), !machinery(Path).
+reading_a_program(Doing, Path) :- datalog(Path), Doing = fn:string:concat("read the program ", Path).
+does(Doing) :- reading_a_program(Doing, _).
+effect(Doing, "read_a_program") :- reading_a_program(Doing, _).
+gives(Doing, "path", Path) :- reading_a_program(Doing, Path).
+defines(Path, Predicate) :- reading_a_program(Doing, Path), got(Doing, "defines", Predicate).
+
+violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !known(Path).
 violation("the_only_knowledge_is_datalog", Path) :- finding_comments(Doing, Path), got(Doing, "comment", _).
+violation("only_the_machine_observes", Path) :- defines(Path, Predicate), supplied_by_the_machine(Predicate).
 
 does("read the universe").
 effect("read the universe", "read_lines").
@@ -62,3 +76,7 @@ violation("every_line_is_accounted_for", Text) :- universe_line(Text), !accounte
 reasoned(Requirement) :- why(Requirement, _).
 
 violation("every_requirement_has_a_reason", Requirement) :- about(_, Requirement), !reasoned(Requirement).
+
+a_law_is_broken() :- violation(_, _).
+answer("false") :- a_law_is_broken().
+answer("true") :- !a_law_is_broken().
