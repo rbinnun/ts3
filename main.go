@@ -20,23 +20,26 @@ import (
 	"codeberg.org/TauCeti/mangle-go/parse"
 	"codeberg.org/TauCeti/mangle-go/parse/gen"
 	"github.com/antlr4-go/antlr/v4"
-	"mvdan.cc/sh/v3/fileutil"
 	"mvdan.cc/sh/v3/syntax"
 )
 
 const mangleModule = "codeberg.org/TauCeti/mangle-go"
 
 var (
-	doesSym       = ast.PredicateSym{Symbol: "does", Arity: 1}
-	effectSym     = ast.PredicateSym{Symbol: "effect", Arity: 2}
-	givesSym      = ast.PredicateSym{Symbol: "gives", Arity: 3}
-	gotSym        = ast.PredicateSym{Symbol: "got", Arity: 3}
-	machineSym    = ast.PredicateSym{Symbol: "machine_program", Arity: 1}
-	tellsName     = "tells"
-	violationName = "violation"
+	doesSym     = ast.PredicateSym{Symbol: "does", Arity: 1}
+	effectSym   = ast.PredicateSym{Symbol: "effect", Arity: 2}
+	givesSym    = ast.PredicateSym{Symbol: "gives", Arity: 3}
+	gotSym      = ast.PredicateSym{Symbol: "got", Arity: 3}
+	machineSym  = ast.PredicateSym{Symbol: "machine_program", Arity: 1}
+	outputSym   = ast.PredicateSym{Symbol: "output", Arity: 2}
+	answerSym   = ast.PredicateSym{Symbol: "answer", Arity: 1}
+	exitCodeSym = ast.PredicateSym{Symbol: "exit_code", Arity: 2}
 )
 
-const maxRounds = 100
+const (
+	maxRounds  = 100
+	brokenExit = 2
+)
 
 type machine struct {
 	dir      string
@@ -61,8 +64,15 @@ type result struct {
 var effects = map[string]effectFunc{
 	"list_a_folder":    listAFolder,
 	"find_comments":    findComments,
+	"read_a_program":   readAProgram,
 	"read_lines":       readLines,
 	"know_the_machine": knowTheMachine,
+}
+
+var commentFinders = map[string]func(name string, src []byte) ([]string, error){
+	"mangle": mangleComments,
+	"go":     goComments,
+	"sh":     shellComments,
 }
 
 func main() {
@@ -74,12 +84,14 @@ func main() {
 	flag.Parse()
 	if flag.NArg() != 1 {
 		flag.Usage()
-		os.Exit(2)
+		os.Exit(brokenExit)
 	}
-	if err := run(flag.Arg(0), *entry); err != nil {
+	code, err := run(flag.Arg(0), *entry)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		os.Exit(brokenExit)
 	}
+	os.Exit(code)
 }
 
 type evaluator func(got []ast.Atom) (factstore.FactStore, error)
@@ -120,23 +132,50 @@ func compile(names []string, units []parse.SourceUnit) (evaluator, error) {
 	}, nil
 }
 
-func run(path, entry string) error {
+func run(path, entry string) (int, error) {
 	program := filepath.Clean(path)
 	m := &machine{dir: filepath.Dir(program), entry: entry}
 	store, err := m.execute(program)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if violations := lines(store, violationName); len(violations) > 0 {
-		for _, v := range violations {
-			fmt.Fprintln(os.Stderr, "violation:", v)
+	var out []string
+	for _, o := range facts(store, outputSym) {
+		if format := str(o[1]); format != "mangle" {
+			return 0, fmt.Errorf("cannot write %s in %q", str(o[0]), format)
 		}
-		return fmt.Errorf("%s does not hold: %d violation(s)", filepath.Base(path), len(violations))
+		out = append(out, mangleFacts(store, str(o[0]))...)
 	}
-	for _, l := range lines(store, tellsName) {
+	sort.Strings(out)
+	code, err := exitCode(store)
+	if err != nil {
+		return 0, err
+	}
+	for _, l := range out {
 		fmt.Println(l)
 	}
-	return nil
+	return code, nil
+}
+
+func exitCode(store factstore.FactStore) (int, error) {
+	answers := facts(store, answerSym)
+	if len(answers) != 1 {
+		return 0, fmt.Errorf("needs exactly one answer, found %d", len(answers))
+	}
+	var codes []ast.Constant
+	for _, e := range facts(store, exitCodeSym) {
+		if e[0].Equals(answers[0][0]) {
+			codes = append(codes, e[1])
+		}
+	}
+	if len(codes) != 1 {
+		return 0, fmt.Errorf("answer %s needs exactly one exit code, found %d", show(answers[0][0]), len(codes))
+	}
+	code, err := codes[0].NumberValue()
+	if err != nil || code < 0 || code > 255 {
+		return 0, fmt.Errorf("answer %s has exit code %v, not a number from 0 to 255", show(answers[0][0]), codes[0])
+	}
+	return int(code), nil
 }
 
 func (m *machine) execute(program string) (factstore.FactStore, error) {
@@ -214,21 +253,17 @@ func (m *machine) execute(program string) (factstore.FactStore, error) {
 	return store, nil
 }
 
-func lines(store factstore.FactStore, name string) []string {
+func mangleFacts(store factstore.FactStore, name string) []string {
 	var out []string
 	for _, pred := range store.ListPredicates() {
 		if pred.Symbol != name {
 			continue
 		}
-		for _, args := range facts(store, pred) {
-			parts := make([]string, len(args))
-			for i, a := range args {
-				parts[i] = show(a)
-			}
-			out = append(out, strings.Join(parts, "\t"))
-		}
+		store.GetFacts(ast.NewQuery(pred), func(a ast.Atom) error {
+			out = append(out, a.String()+".")
+			return nil
+		})
 	}
-	sort.Strings(out)
 	return out
 }
 
@@ -325,29 +360,60 @@ func findComments(m *machine, in map[string][]ast.Constant) ([]result, error) {
 	if err != nil {
 		return nil, err
 	}
+	lang, err := onlyString("find_comments", "language", in)
+	if err != nil {
+		return nil, err
+	}
+	find, ok := commentFinders[lang]
+	if !ok {
+		return nil, fmt.Errorf("find_comments knows no comments in %q", lang)
+	}
 	at := m.at(path)
 	src, err := os.ReadFile(at)
 	if err != nil {
 		return nil, err
 	}
-	var comments []string
-	var lang string
-	switch filepath.Ext(path) {
-	case ".mg":
-		lang = "mangle"
-		comments, err = mangleComments(src)
-	case ".go":
-		lang = "go"
-		comments, err = goComments(at, src)
-	default:
-		lang, comments, err = shellComments(at, src)
-	}
+	comments, err := find(at, src)
 	if err != nil {
 		return nil, fmt.Errorf("find_comments in %s: %w", path, err)
 	}
 	out := []result{{"syntax", ast.String(lang)}}
 	for _, c := range comments {
 		out = append(out, result{"comment", ast.String(c)})
+	}
+	return out, nil
+}
+
+func readAProgram(m *machine, in map[string][]ast.Constant) ([]result, error) {
+	path, err := onlyString("read_a_program", "path", in)
+	if err != nil {
+		return nil, err
+	}
+	unit, err := parseFile(m.at(path))
+	if err != nil {
+		return nil, err
+	}
+	lawsIn := map[string]bool{}
+	for _, c := range in["laws_in"] {
+		lawsIn[str(c)] = true
+	}
+	var out []result
+	seen := map[string]bool{}
+	for _, c := range unit.Clauses {
+		name := c.Head.Predicate.Symbol
+		if !seen["defines\x00"+name] {
+			seen["defines\x00"+name] = true
+			out = append(out, result{"defines", ast.String(name)})
+		}
+		if !lawsIn[name] || len(c.Head.Args) == 0 {
+			continue
+		}
+		law, ok := c.Head.Args[0].(ast.Constant)
+		if !ok || seen["law\x00"+law.String()] {
+			continue
+		}
+		seen["law\x00"+law.String()] = true
+		out = append(out, result{"law", law})
 	}
 	return out, nil
 }
@@ -372,7 +438,10 @@ func readLines(m *machine, in map[string][]ast.Constant) ([]result, error) {
 }
 
 func knowTheMachine(m *machine, in map[string][]ast.Constant) ([]result, error) {
-	out := []result{{"mangle_module", ast.String(mangleModule)}}
+	out := []result{
+		{"mangle_module", ast.String(mangleModule)},
+		{"exits_broken_with", ast.Number(brokenExit)},
+	}
 	if v := linkedVersion(); v != "" {
 		out = append(out, result{"mangle_version", ast.String(v)})
 	}
@@ -394,7 +463,7 @@ func (l *lexErrors) SyntaxError(_ antlr.Recognizer, _ any, line, column int, msg
 	l.errs = append(l.errs, fmt.Sprintf("%d:%d: %s", line, column, msg))
 }
 
-func mangleComments(src []byte) ([]string, error) {
+func mangleComments(_ string, src []byte) ([]string, error) {
 	lexer := gen.NewMangleLexer(antlr.NewInputStream(string(src)))
 	lexer.RemoveErrorListeners()
 	errs := &lexErrors{DefaultErrorListener: antlr.NewDefaultErrorListener()}
@@ -432,20 +501,10 @@ func goComments(name string, src []byte) ([]string, error) {
 	return out, nil
 }
 
-func shellComments(name string, src []byte) (string, []string, error) {
-	lang := syntax.LangPOSIX
-	if bytes.HasPrefix(src, []byte("#!")) {
-		shell := fileutil.Shebang(src)
-		if shell == "" {
-			return "", nil, errors.New("starts with #! but names no shell whose comments are known")
-		}
-		if err := lang.Set(shell); err != nil {
-			return "", nil, err
-		}
-	}
-	f, err := syntax.NewParser(syntax.KeepComments(true), syntax.Variant(lang)).Parse(bytes.NewReader(src), name)
+func shellComments(name string, src []byte) ([]string, error) {
+	f, err := syntax.NewParser(syntax.KeepComments(true), syntax.Variant(syntax.LangPOSIX)).Parse(bytes.NewReader(src), name)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	var out []string
 	syntax.Walk(f, func(n syntax.Node) bool {
@@ -454,7 +513,7 @@ func shellComments(name string, src []byte) (string, []string, error) {
 		}
 		return true
 	})
-	return lang.String(), out, nil
+	return out, nil
 }
 
 func facts(store factstore.FactStore, pred ast.PredicateSym) [][]ast.Constant {
