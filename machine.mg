@@ -48,3 +48,7 @@ does("this run", "tracing").
 fired(Path, Number) :- got("this run", "fired", Clause), Path = fn:list:get(Clause, 0), Number = fn:list:get(Clause, 1).
 fired(Path, Number) :- trying(_, Doing), got(Doing, "fired", Clause), Path = fn:list:get(Clause, 0), Number = fn:list:get(Clause, 1).
 unfired(Path, Line) :- clause_at(Path, Number, Line, _), !fired(Path, Number).
+
+rule_for(Rule, Word) :- program(Path), clause_at(Path, _, Line, Word), Rule = [Path, Line].
+rule_for_law(Rule, Law) :- program(Path), clause_at(Path, Number, Line, "violation"), argument_at(Path, Number, 1, Law), Rule = [Path, Line].
+rule_uses(Rule, Word) :- uses(Path, Number, Word), clause_at(Path, Number, Line, _), Rule = [Path, Line].
