@@ -12,7 +12,6 @@ read_by_the_machinery("reads_as").
 read_by_the_machinery("answer").
 read_by_the_machinery("exit_code").
 read_by_the_machinery("output_file").
-read_by_the_machinery("title").
 read_by_the_machinery("shows").
 read_by_the_machinery("shows_case").
 read_by_the_machinery("opens_into").
@@ -38,16 +37,16 @@ belongs_to(Path, "the machinery") :- language(Path, Language), !readable(Languag
 belongs_to(Path, "the outputs") :- output_file(Path).
 in_a_leg(Path) :- belongs_to(Path, Leg), leg(Leg).
 
-violation("every_file_belongs_to_a_leg", Path) :- universe_file(Path), !in_a_leg(Path).
-violation("the_world_sees_itself", "universe.mg") :- !universe_file("universe.mg").
-violation("the_world_sees_itself", Path) :- machine_program(Path), !universe_file(Path).
+violation("Every file belongs to a leg", Path) :- universe_file(Path), !in_a_leg(Path).
+violation("The world sees itself", "universe.mg") :- !universe_file("universe.mg").
+violation("The world sees itself", Path) :- machine_program(Path), !universe_file(Path).
 
 case_adds_line("a file outside the legs", "notes.mg", 'note("a").').
-case_expects("a file outside the legs", "every_file_belongs_to_a_leg").
+case_expects("a file outside the legs", "Every file belongs to a leg").
 case_answer("a file outside the legs", "false").
 
 case_adds_line("a machine program that is missing", "universe.mg", 'machine_program("missing.mg").').
-case_expects("a machine program that is missing", "the_world_sees_itself").
+case_expects("a machine program that is missing", "The world sees itself").
 case_answer("a machine program that is missing", "false").
 
 reads_as("supplied_by", "the word {1} is supplied by {2}").
@@ -89,14 +88,14 @@ Decl rule_for(Rule, Word).
 Decl rule_for_law(Rule, Law).
 Decl rule_uses(Rule, Word).
 
-violation("each_word_has_one_supplier", Path) :- defines(Path, Predicate), supplied_by(Predicate, Supplier), Supplier != Path.
+violation("Each word has one supplier", Path) :- defines(Path, Predicate), supplied_by(Predicate, Supplier), Supplier != Path.
 
 case_adds_line("a program that fakes an observation", "machine.mg", 'got("a step", "file", "nowhere").').
-case_expects("a program that fakes an observation", "each_word_has_one_supplier").
+case_expects("a program that fakes an observation", "Each word has one supplier").
 case_answer("a program that fakes an observation", "false").
 
 case_adds_line("a spec that observes for itself", "universe.mg", 'universe_file("ghost.txt").').
-case_expects("a spec that observes for itself", "each_word_has_one_supplier").
+case_expects("a spec that observes for itself", "Each word has one supplier").
 case_answer("a spec that observes for itself", "false").
 
 reads_as("universe_file", "{1} is a file of the world").
@@ -104,10 +103,10 @@ reads_as("known", "{1} is known").
 
 known(Path) :- language(Path, _).
 
-violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !known(Path).
+violation("The only knowledge is Datalog", Path) :- universe_file(Path), !known(Path).
 
 case_adds_line("a file that is not datalog", "notes.txt", "a note").
-case_expects("a file that is not datalog", "the_only_knowledge_is_datalog").
+case_expects("a file that is not datalog", "The only knowledge is Datalog").
 case_answer("a file that is not datalog", "false").
 
 reads_as("written_in", "names ending in {1} are written in {2}").
@@ -131,10 +130,10 @@ has_comments("mangle").
 has_comments("go").
 has_comments("sh").
 
-violation("the_only_knowledge_is_datalog", Path) :- comment_in(Path, _).
+violation("The only knowledge is Datalog", Path) :- comment_in(Path, _).
 
 case_adds_line("a comment", "machine.mg", "# a note").
-case_expects("a comment", "the_only_knowledge_is_datalog").
+case_expects("a comment", "The only knowledge is Datalog").
 case_answer("a comment", "false").
 
 reads_as("answer", "the answer is {1}").
@@ -190,16 +189,16 @@ expects_no_law(Case) :- case_expects(Case, Law), !law(Law).
 shown_failing(Law) :- case_broke(_, Law).
 shown_failing(Law) :- in_a_case(), case_expects(_, Law).
 
-violation("every_law_is_shown_failing", Law) :- law(Law), !shown_failing(Law).
-violation("every_case_comes_out_as_stated", Case) :- case(Case), !in_a_case(), !came_out_as_stated(Case).
-violation("every_case_comes_out_as_stated", Case) :- expects_no_law(Case).
+violation("Every law is shown failing", Law) :- law(Law), !shown_failing(Law).
+violation("Every case comes out as stated", Case) :- case(Case), !in_a_case(), !came_out_as_stated(Case).
+violation("Every case comes out as stated", Case) :- expects_no_law(Case).
 
-case_adds_line("a law with no case", "machine.mg", 'violation("a_law_with_no_case", Path) :- universe_file(Path), :string:ends_with(Path, ".txt").').
-case_expects("a law with no case", "every_law_is_shown_failing").
+case_adds_line("a law with no case", "machine.mg", 'violation("A law with no case", Path) :- universe_file(Path), :string:ends_with(Path, ".txt").').
+case_expects("a law with no case", "Every law is shown failing").
 case_answer("a law with no case", "false").
 
-case_adds_line("a case that expects a law nobody laid down", "machine.mg", 'case_expects("a ghost case", "a_law_nobody_laid_down").').
-case_expects("a case that expects a law nobody laid down", "every_case_comes_out_as_stated").
+case_adds_line("a case that expects a law nobody laid down", "machine.mg", 'case_expects("a ghost case", "A law nobody laid down").').
+case_expects("a case that expects a law nobody laid down", "Every case comes out as stated").
 case_answer("a case that expects a law nobody laid down", "false").
 
 reads_as("reads_as", "the word {1} reads as {2}").
@@ -220,11 +219,11 @@ rests_on(Law, Word) :- law_mentions(Law, Word).
 reaches_the_outside(Word) :- read_by_the_machinery(Word).
 reaches_the_outside(Other) :- rests_on(Word, Other), reaches_the_outside(Word).
 
-violation("every_word_is_understood", Word) :- word(Word), !has_a_reading(Word).
-violation("every_word_is_understood", Word) :- word(Word), !reaches_the_outside(Word).
+violation("Every word is understood", Word) :- word(Word), !has_a_reading(Word).
+violation("Every word is understood", Word) :- word(Word), !reaches_the_outside(Word).
 
 case_adds_line("a word nobody explained", "universe.mg", 'lonely("a").').
-case_expects("a word nobody explained", "every_word_is_understood").
+case_expects("a word nobody explained", "Every word is understood").
 case_answer("a word nobody explained", "false").
 
 reads_as("output_file", "{1} is written by the machine on every run").
@@ -232,8 +231,6 @@ reads_as("rule_for", "the rule {1} defines {2}").
 reads_as("rule_for_law", "the rule {1} lays down {2}").
 reads_as("rule_uses", "the rule {1} uses {2}").
 reads_as("concept", "{1} is a concept").
-reads_as("title", "{1} is titled {2}").
-reads_as("titled", "{1} has a title").
 reads_as("negation", "{1} reads {2} when it is not so").
 reads_as("shows", "the concept {1} is made of the rule {2}").
 reads_as("shows_case", "the concept {1} is shown by {2}").
@@ -245,16 +242,6 @@ output_file("universe.html").
 
 concept("the answer").
 concept(Law) :- law(Law).
-title("the answer", "The answer").
-title("the_only_knowledge_is_datalog", "The only knowledge is Datalog").
-title("each_word_has_one_supplier", "Each word has one supplier").
-title("every_file_belongs_to_a_leg", "Every file belongs to a leg").
-title("the_world_sees_itself", "The world sees itself").
-title("every_law_is_shown_failing", "Every law is shown failing").
-title("every_case_comes_out_as_stated", "Every case comes out as stated").
-title("every_word_is_understood", "Every word is understood").
-title("every_concept_has_a_title", "Every concept has a title").
-titled(Concept) :- title(Concept, _).
 
 negation("is", "is not").
 negation("are", "are not").
@@ -276,8 +263,3 @@ shows_case(Law, Case) :- concept(Law), case_expects(Case, Law).
 opens_into(Rule, Word) :- rule_uses(Rule, Word).
 explained_by(Word, Rule) :- rule_for(Rule, Word).
 
-violation("every_concept_has_a_title", Concept) :- concept(Concept), !titled(Concept).
-
-case_adds_line("a concept with no title", "machine.mg", 'violation("an_untitled_law", "here") :- universe_file("nowhere").').
-case_expects("a concept with no title", "every_concept_has_a_title").
-case_answer("a concept with no title", "false").
