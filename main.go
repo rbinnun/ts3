@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 
@@ -34,17 +35,26 @@ var (
 	outputSym   = ast.PredicateSym{Symbol: "output", Arity: 2}
 	answerSym   = ast.PredicateSym{Symbol: "answer", Arity: 1}
 	exitCodeSym = ast.PredicateSym{Symbol: "exit_code", Arity: 2}
+	startedSym  = ast.PredicateSym{Symbol: "started_by", Arity: 1}
 )
 
 const (
 	maxRounds  = 100
 	brokenExit = 2
+	runACaseFx = "run_a_case"
 )
 
 type machine struct {
-	dir      string
-	entry    string
-	programs []string
+	dir       string
+	program   string
+	entry     string
+	startedBy []string
+	programs  []string
+}
+
+type outcome struct {
+	code int
+	told []ast.Atom
 }
 
 func (m *machine) at(path string) string {
@@ -61,12 +71,17 @@ type result struct {
 	value ast.Constant
 }
 
-var effects = map[string]effectFunc{
-	"list_a_folder":    listAFolder,
-	"find_comments":    findComments,
-	"read_a_program":   readAProgram,
-	"read_lines":       readLines,
-	"know_the_machine": knowTheMachine,
+var effects map[string]effectFunc
+
+func init() {
+	effects = map[string]effectFunc{
+		"list_a_folder":    listAFolder,
+		"find_comments":    findComments,
+		"read_a_program":   readAProgram,
+		"read_lines":       readLines,
+		"know_the_machine": knowTheMachine,
+		runACaseFx:         runACase,
+	}
 }
 
 var commentFinders = map[string]func(name string, src []byte) ([]string, error){
@@ -133,28 +148,49 @@ func compile(names []string, units []parse.SourceUnit) (evaluator, error) {
 }
 
 func run(path, entry string) (int, error) {
-	program := filepath.Clean(path)
-	m := &machine{dir: filepath.Dir(program), entry: entry}
-	store, err := m.execute(program)
+	m := &machine{entry: entry}
+	o, err := m.outcome(path)
 	if err != nil {
 		return 0, err
 	}
 	var out []string
-	for _, o := range facts(store, outputSym) {
-		if format := str(o[1]); format != "mangle" {
-			return 0, fmt.Errorf("cannot write %s in %q", str(o[0]), format)
-		}
-		out = append(out, mangleFacts(store, str(o[0]))...)
+	for _, a := range o.told {
+		out = append(out, a.String()+".")
 	}
 	sort.Strings(out)
-	code, err := exitCode(store)
-	if err != nil {
-		return 0, err
-	}
 	for _, l := range out {
 		fmt.Println(l)
 	}
-	return code, nil
+	return o.code, nil
+}
+
+func (m *machine) outcome(path string) (outcome, error) {
+	program := filepath.Clean(path)
+	m.dir, m.program = filepath.Dir(program), filepath.Base(program)
+	store, err := m.execute(program)
+	if err != nil {
+		return outcome{}, err
+	}
+	var told []ast.Atom
+	for _, o := range facts(store, outputSym) {
+		if format := str(o[1]); format != "mangle" {
+			return outcome{}, fmt.Errorf("cannot write %s in %q", str(o[0]), format)
+		}
+		told = append(told, factsNamed(store, str(o[0]))...)
+	}
+	code, err := exitCode(store)
+	if err != nil {
+		return outcome{}, err
+	}
+	return outcome{code: code, told: told}, nil
+}
+
+func (m *machine) given() []ast.Atom {
+	var out []ast.Atom
+	for _, s := range m.startedBy {
+		out = append(out, ast.NewAtom(startedSym.Symbol, ast.String(s)))
+	}
+	return out
 }
 
 func exitCode(store factstore.FactStore) (int, error) {
@@ -189,7 +225,7 @@ func (m *machine) execute(program string) (factstore.FactStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := eval(nil)
+	store, err := eval(m.given())
 	if err != nil {
 		return nil, err
 	}
@@ -215,12 +251,12 @@ func (m *machine) execute(program string) (factstore.FactStore, error) {
 		if eval, err = compile(names, units); err != nil {
 			return nil, err
 		}
-		if store, err = eval(nil); err != nil {
+		if store, err = eval(m.given()); err != nil {
 			return nil, err
 		}
 	}
 
-	var got []ast.Atom
+	got := m.given()
 	done := map[string]bool{}
 	for round := 0; ; round++ {
 		if round == maxRounds {
@@ -253,14 +289,14 @@ func (m *machine) execute(program string) (factstore.FactStore, error) {
 	return store, nil
 }
 
-func mangleFacts(store factstore.FactStore, name string) []string {
-	var out []string
+func factsNamed(store factstore.FactStore, name string) []ast.Atom {
+	var out []ast.Atom
 	for _, pred := range store.ListPredicates() {
 		if pred.Symbol != name {
 			continue
 		}
 		store.GetFacts(ast.NewQuery(pred), func(a ast.Atom) error {
-			out = append(out, a.String()+".")
+			out = append(out, a)
 			return nil
 		})
 	}
@@ -451,7 +487,114 @@ func knowTheMachine(m *machine, in map[string][]ast.Constant) ([]result, error) 
 	for _, p := range m.programs {
 		out = append(out, result{"machine_program", ast.String(p)})
 	}
+	for _, s := range m.startedBy {
+		out = append(out, result{"started_by", ast.String(s)})
+	}
 	return out, nil
+}
+
+func runACase(m *machine, in map[string][]ast.Constant) ([]result, error) {
+	if slices.Contains(m.startedBy, runACaseFx) {
+		return nil, fmt.Errorf("%s cannot start inside a case", runACaseFx)
+	}
+	tmp, err := os.MkdirTemp("", "universe-case-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	if err := m.copyFolder(tmp); err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(in))
+	for p := range in {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		if !filepath.IsLocal(p) {
+			return nil, fmt.Errorf("%s cannot add lines to %q, which is outside the folder", runACaseFx, p)
+		}
+		var lines []string
+		for _, c := range in[p] {
+			line, err := c.StringValue()
+			if err != nil {
+				return nil, fmt.Errorf("%s: a line for %s must be a string: %w", runACaseFx, p, err)
+			}
+			lines = append(lines, line)
+		}
+		sort.Strings(lines)
+		if err := addLines(filepath.Join(tmp, p), lines); err != nil {
+			return nil, err
+		}
+	}
+	inner := &machine{entry: m.entry, startedBy: append(slices.Clone(m.startedBy), runACaseFx)}
+	o, err := inner.outcome(filepath.Join(tmp, m.program))
+	if err != nil {
+		return []result{{"exit", ast.Number(brokenExit)}}, nil
+	}
+	out := []result{{"exit", ast.Number(int64(o.code))}}
+	seen := map[string]bool{}
+	for _, a := range o.told {
+		if len(a.Args) == 0 {
+			continue
+		}
+		c, ok := a.Args[0].(ast.Constant)
+		if !ok {
+			continue
+		}
+		key := a.Predicate.Symbol + "\x00" + c.String()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, result{a.Predicate.Symbol, c})
+	}
+	return out, nil
+}
+
+func (m *machine) copyFolder(to string) error {
+	entries, err := os.ReadDir(m.dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		from := filepath.Join(m.dir, e.Name())
+		fi, err := os.Stat(from)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return err
+		}
+		if !fi.Mode().IsRegular() {
+			continue
+		}
+		src, err := os.ReadFile(from)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(to, e.Name()), src, fi.Mode().Perm()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func addLines(path string, lines []string) error {
+	src, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if len(src) > 0 && !bytes.HasSuffix(src, []byte("\n")) {
+		src = append(src, '\n')
+	}
+	for _, l := range lines {
+		src = append(append(src, l...), '\n')
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, src, 0o644)
 }
 
 type lexErrors struct {
