@@ -11,6 +11,13 @@ read_by_the_machinery("printed_in").
 read_by_the_machinery("reads_as").
 read_by_the_machinery("answer").
 read_by_the_machinery("exit_code").
+read_by_the_machinery("output_file").
+read_by_the_machinery("title").
+read_by_the_machinery("shows").
+read_by_the_machinery("shows_case").
+read_by_the_machinery("opens_into").
+read_by_the_machinery("explained_by").
+read_by_the_machinery("negation").
 
 reads_as("machine_program", "{1} is a machine program").
 reads_as("leg", "{1} is a leg").
@@ -23,10 +30,12 @@ machine_program("machine.mg").
 leg("universe.mg").
 leg("machine.mg").
 leg("the machinery").
+leg("the outputs").
 
 belongs_to("universe.mg", "universe.mg").
 belongs_to(Path, "machine.mg") :- machine_program(Path).
-belongs_to(Path, "the machinery") :- language(Path, Language), !readable(Language).
+belongs_to(Path, "the machinery") :- language(Path, Language), !readable(Language), !output_file(Path).
+belongs_to(Path, "the outputs") :- output_file(Path).
 in_a_leg(Path) :- belongs_to(Path, Leg), leg(Leg).
 
 violation("every_file_belongs_to_a_leg", Path) :- universe_file(Path), !in_a_leg(Path).
@@ -59,6 +68,9 @@ supplied_by("unfired", "machine.mg").
 supplied_by("size", "machine.mg").
 supplied_by("mentions", "machine.mg").
 supplied_by("law_mentions", "machine.mg").
+supplied_by("rule_for", "machine.mg").
+supplied_by("rule_for_law", "machine.mg").
+supplied_by("rule_uses", "machine.mg").
 
 Decl got(Doing, Field, Value).
 Decl started_by(Effect).
@@ -73,6 +85,9 @@ Decl unfired(Path, Line).
 Decl size(Path, Lines).
 Decl mentions(Word, Other).
 Decl law_mentions(Law, Word).
+Decl rule_for(Rule, Word).
+Decl rule_for_law(Rule, Law).
+Decl rule_uses(Rule, Word).
 
 violation("each_word_has_one_supplier", Path) :- defines(Path, Predicate), supplied_by(Predicate, Supplier), Supplier != Path.
 
@@ -103,6 +118,7 @@ written_in(".mg", "mangle").
 written_in(".go", "go").
 written_in("go.mod", "go module").
 written_in("go.sum", "go checksums").
+written_in(".html", "html").
 written_in(Entry, "sh") :- entry_point(Entry).
 readable("mangle").
 
@@ -211,3 +227,57 @@ case_adds_line("a word nobody explained", "universe.mg", 'lonely("a").').
 case_expects("a word nobody explained", "every_word_is_understood").
 case_answer("a word nobody explained", "false").
 
+reads_as("output_file", "{1} is written by the machine on every run").
+reads_as("rule_for", "the rule {1} defines {2}").
+reads_as("rule_for_law", "the rule {1} lays down {2}").
+reads_as("rule_uses", "the rule {1} uses {2}").
+reads_as("concept", "{1} is a concept").
+reads_as("title", "{1} is titled {2}").
+reads_as("titled", "{1} has a title").
+reads_as("negation", "{1} reads {2} when it is not so").
+reads_as("shows", "the concept {1} is made of the rule {2}").
+reads_as("shows_case", "the concept {1} is shown by {2}").
+reads_as("opens_into", "the rule {1} opens into {2}").
+reads_as("explained_by", "{1} is explained by the rule {2}").
+reads_as("expects_a_law", "{1} expects a law to break").
+
+output_file("universe.html").
+
+concept("the answer").
+concept(Law) :- law(Law).
+title("the answer", "The answer").
+title("the_only_knowledge_is_datalog", "The only knowledge is Datalog").
+title("each_word_has_one_supplier", "Each word has one supplier").
+title("every_file_belongs_to_a_leg", "Every file belongs to a leg").
+title("the_world_sees_itself", "The world sees itself").
+title("every_law_is_shown_failing", "Every law is shown failing").
+title("every_case_comes_out_as_stated", "Every case comes out as stated").
+title("every_word_is_understood", "Every word is understood").
+title("every_concept_has_a_title", "Every concept has a title").
+titled(Concept) :- title(Concept, _).
+
+negation("is", "is not").
+negation("are", "are not").
+negation("has", "does not have").
+negation("broke", "did not break").
+negation("answered", "did not answer").
+negation("defines", "does not define").
+negation("uses", "does not use").
+negation("reaches", "does not reach").
+negation("expects", "does not expect").
+negation("came out", "did not come out").
+negation("missed a", "missed no").
+
+expects_a_law(Case) :- case_expects(Case, _).
+shows("the answer", Rule) :- rule_for(Rule, "answer").
+shows(Law, Rule) :- concept(Law), rule_for_law(Rule, Law).
+shows_case("the answer", Case) :- case_answer(Case, _), !expects_a_law(Case).
+shows_case(Law, Case) :- concept(Law), case_expects(Case, Law).
+opens_into(Rule, Word) :- rule_uses(Rule, Word).
+explained_by(Word, Rule) :- rule_for(Rule, Word).
+
+violation("every_concept_has_a_title", Concept) :- concept(Concept), !titled(Concept).
+
+case_adds_line("a concept with no title", "machine.mg", 'violation("an_untitled_law", "here") :- universe_file("nowhere").').
+case_expects("a concept with no title", "every_concept_has_a_title").
+case_answer("a concept with no title", "false").
