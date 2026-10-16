@@ -20,19 +20,21 @@ met_by("the machinery", "know the machine").
 met_by("the machinery", Doing) :- finding_comments(Doing, Path), !datalog(Path).
 met_by("this folder", "list the universe").
 met_by("the legs", "list the universe").
-met_by("the declarations", Doing) :- does(Doing).
-met_by("the_only_knowledge_is_datalog", "list the universe").
-met_by("the_only_knowledge_is_datalog", Doing) :- finding_comments(Doing, _).
+met_by("the declarations", "know the machine").
+met_by("the declarations", Doing) :- reading_a_program(Doing, Path), machine_program(Path).
+met_by("the languages", "list the universe").
+met_by("the languages", Doing) :- finding_comments(Doing, _).
 met_by("the programs", Doing) :- reading_a_program(Doing, _).
-met_by("each_word_has_one_supplier", Doing) :- reading_a_program(Doing, _).
-met_by("every_line_is_accounted_for", "read the universe").
-met_by("every_requirement_serves_a_purpose", Doing) :- reading_a_program(Doing, _).
-met_by("every_file_belongs_to_a_leg", "list the universe").
+met_by("the suppliers", Doing) :- reading_a_program(Doing, _).
+met_by("the lines", "read the universe").
+met_by("the purposes", Doing) :- reading_a_program(Doing, _).
+met_by("the requirements", Doing) :- reading_a_program(Doing, _).
+met_by("the leg of each file", "list the universe").
 met_by("the cases", Doing) :- running_a_case(Doing, _).
 met_by("the cases", "know the machine") :- got("know the machine", "started_by", "run_a_case").
-met_by("every_case_comes_out_as_stated", Doing) :- running_a_case(Doing, _).
-met_by("every_case_comes_out_as_stated", "know the machine") :- got("know the machine", "started_by", "run_a_case").
-met_by("every_law_is_shown_failing", Doing) :- reading_a_program(Doing, _).
+met_by("the outcomes", Doing) :- running_a_case(Doing, _).
+met_by("the outcomes", "know the machine") :- got("know the machine", "started_by", "run_a_case").
+met_by("the laws", Doing) :- reading_a_program(Doing, _).
 met_by("the answer", "know the machine").
 
 serves("universe.mg", "every_line_is_accounted_for").
@@ -41,17 +43,18 @@ serves("the machinery", "the_machine_is_the_one_asked_for").
 serves("this folder", "tells").
 serves("the legs", "every_file_belongs_to_a_leg").
 serves("the declarations", "each_word_has_one_supplier").
-serves("the_only_knowledge_is_datalog", "the_only_knowledge_is_datalog").
+serves("the languages", "the_only_knowledge_is_datalog").
 serves("the programs", "each_word_has_one_supplier").
 serves("the programs", "every_requirement_serves_a_purpose").
-serves("each_word_has_one_supplier", "each_word_has_one_supplier").
-serves("every_line_is_accounted_for", "every_line_is_accounted_for").
-serves("every_requirement_serves_a_purpose", "every_requirement_serves_a_purpose").
-serves("every_file_belongs_to_a_leg", "every_file_belongs_to_a_leg").
+serves("the suppliers", "each_word_has_one_supplier").
+serves("the lines", "every_line_is_accounted_for").
+serves("the purposes", "every_requirement_serves_a_purpose").
+serves("the requirements", "every_requirement_is_specific").
+serves("the leg of each file", "every_file_belongs_to_a_leg").
 serves("the cases", "every_case_comes_out_as_stated").
 serves("the cases", "every_law_is_shown_failing").
-serves("every_case_comes_out_as_stated", "every_case_comes_out_as_stated").
-serves("every_law_is_shown_failing", "every_law_is_shown_failing").
+serves("the outcomes", "every_case_comes_out_as_stated").
+serves("the laws", "every_law_is_shown_failing").
 serves("the answer", "violation").
 serves("the answer", "the_machine_is_the_one_asked_for").
 
@@ -69,20 +72,20 @@ about('a_rebuild_proposes(Leg) :- source_of_truth(Leg).', "the legs").
 about('written_by("universe.mg", "the owner").', "universe.mg").
 about('written_by("machine.mg", "the builder").', "machine.mg").
 about('written_by("the machinery", "the builder").', "the machinery").
-about('written_in(".mg", "mangle").', "the_only_knowledge_is_datalog").
-about('written_in(".go", "go").', "the_only_knowledge_is_datalog").
-about('written_in("go.mod", "go module").', "the_only_knowledge_is_datalog").
-about('written_in("go.sum", "go checksums").', "the_only_knowledge_is_datalog").
-about('written_in(Entry, "sh") :- entry_point(Entry).', "the_only_knowledge_is_datalog").
+about('written_in(".mg", "mangle").', "the languages").
+about('written_in(".go", "go").', "the languages").
+about('written_in("go.mod", "go module").', "the languages").
+about('written_in("go.sum", "go checksums").', "the languages").
+about('written_in(Entry, "sh") :- entry_point(Entry).', "the languages").
 about('readable("mangle").', "the programs").
-about('has_comments("mangle").', "the_only_knowledge_is_datalog").
-about('has_comments("go").', "the_only_knowledge_is_datalog").
-about('has_comments("sh").', "the_only_knowledge_is_datalog").
-about('supplied_by("got", "the machine").', "each_word_has_one_supplier").
-about('supplied_by("about", "machine.mg").', "each_word_has_one_supplier").
-about('supplied_by("met_by", "machine.mg").', "each_word_has_one_supplier").
-about('supplied_by("serves", "machine.mg").', "each_word_has_one_supplier").
-about('supplied_by("started_by", "the machine").', "each_word_has_one_supplier").
+about('has_comments("mangle").', "the languages").
+about('has_comments("go").', "the languages").
+about('has_comments("sh").', "the languages").
+about('supplied_by("got", "the machine").', "the suppliers").
+about('supplied_by("about", "machine.mg").', "the suppliers").
+about('supplied_by("met_by", "machine.mg").', "the suppliers").
+about('supplied_by("serves", "machine.mg").', "the suppliers").
+about('supplied_by("started_by", "the machine").', "the suppliers").
 about('output("tells", "mangle").', "this folder").
 about('output("violation", "mangle").', "the answer").
 about('exit_code("true", 0).', "the answer").
@@ -98,60 +101,64 @@ about('effect("list the universe", "list_a_folder").', "this folder").
 about('gives("list the universe", "folder", ".").', "this folder").
 about('universe_file(Path) :- got("list the universe", "file", Path).', "this folder").
 about('tells(Path) :- universe_file(Path).', "this folder").
-about('language(Path, Language) :- universe_file(Path), written_in(Ending, Language), :string:ends_with(Path, Ending).', "the_only_knowledge_is_datalog").
-about('known(Path) :- language(Path, _).', "the_only_knowledge_is_datalog").
+about('language(Path, Language) :- universe_file(Path), written_in(Ending, Language), :string:ends_with(Path, Ending).', "the languages").
+about('known(Path) :- language(Path, _).', "the languages").
 about('datalog(Path) :- language(Path, Language), readable(Language).', "the programs").
-about('finding_comments(Doing, Path) :- language(Path, Language), has_comments(Language), Doing = fn:string:concat("find comments in ", Path).', "the_only_knowledge_is_datalog").
-about('does(Doing) :- finding_comments(Doing, _).', "the_only_knowledge_is_datalog").
-about('effect(Doing, "find_comments") :- finding_comments(Doing, _).', "the_only_knowledge_is_datalog").
-about('gives(Doing, "path", Path) :- finding_comments(Doing, Path).', "the_only_knowledge_is_datalog").
-about('gives(Doing, "language", Language) :- finding_comments(Doing, Path), language(Path, Language).', "the_only_knowledge_is_datalog").
+about('finding_comments(Doing, Path) :- language(Path, Language), has_comments(Language), Doing = fn:string:concat("find comments in ", Path).', "the languages").
+about('does(Doing) :- finding_comments(Doing, _).', "the languages").
+about('effect(Doing, "find_comments") :- finding_comments(Doing, _).', "the languages").
+about('gives(Doing, "path", Path) :- finding_comments(Doing, Path).', "the languages").
+about('gives(Doing, "language", Language) :- finding_comments(Doing, Path), language(Path, Language).', "the languages").
 about('reading_a_program(Doing, Path) :- datalog(Path), Doing = fn:string:concat("read the program ", Path).', "the programs").
 about('does(Doing) :- reading_a_program(Doing, _).', "the programs").
 about('effect(Doing, "read_a_program") :- reading_a_program(Doing, _).', "the programs").
 about('gives(Doing, "path", Path) :- reading_a_program(Doing, Path).', "the programs").
-about('defines(Path, Predicate) :- reading_a_program(Doing, Path), got(Doing, "defines", Predicate).', "each_word_has_one_supplier").
-about('law(Law) :- reading_a_program(Doing, _), got(Doing, "law", Law).', "every_requirement_serves_a_purpose").
-about('violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !known(Path).', "the_only_knowledge_is_datalog").
-about('violation("the_only_knowledge_is_datalog", Path) :- finding_comments(Doing, Path), got(Doing, "comment", _).', "the_only_knowledge_is_datalog").
-about('violation("each_word_has_one_supplier", Path) :- defines(Path, Predicate), supplied_by(Predicate, Supplier), Supplier != Path.', "each_word_has_one_supplier").
+about('defines(Path, Predicate) :- reading_a_program(Doing, Path), got(Doing, "defines", Predicate).', "the suppliers").
+about('law(Law) :- reading_a_program(Doing, _), got(Doing, "law", Law).', "the purposes").
+about('violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !known(Path).', "the languages").
+about('violation("the_only_knowledge_is_datalog", Path) :- finding_comments(Doing, Path), got(Doing, "comment", _).', "the languages").
+about('violation("each_word_has_one_supplier", Path) :- defines(Path, Predicate), supplied_by(Predicate, Supplier), Supplier != Path.', "the suppliers").
 about('does("read the universe").', "universe.mg").
 about('effect("read the universe", "read_lines").', "universe.mg").
 about('gives("read the universe", "path", "universe.mg").', "universe.mg").
-about('universe_line(Text) :- got("read the universe", "line", Text), Text != "".', "every_line_is_accounted_for").
-about('observed(Doing) :- got(Doing, _, _).', "every_line_is_accounted_for").
-about('met(Requirement) :- met_by(Requirement, Doing), observed(Doing).', "every_line_is_accounted_for").
-about('accounted_for(Text) :- about(Text, Requirement), met(Requirement).', "every_line_is_accounted_for").
-about('purpose(Law) :- law(Law).', "every_requirement_serves_a_purpose").
-about('purpose(Predicate) :- output(Predicate, _).', "every_requirement_serves_a_purpose").
-about('serves_a_purpose(Requirement) :- serves(Requirement, Purpose), purpose(Purpose).', "every_requirement_serves_a_purpose").
-about('has_a_requirement(Doing) :- met_by(_, Doing).', "every_requirement_serves_a_purpose").
+about('universe_line(Text) :- got("read the universe", "line", Text), Text != "".', "the lines").
+about('observed(Doing) :- got(Doing, _, _).', "the lines").
+about('met(Requirement) :- met_by(Requirement, Doing), observed(Doing).', "the lines").
+about('accounted_for(Text) :- about(Text, Requirement), met(Requirement).', "the lines").
+about('purpose(Law) :- law(Law).', "the purposes").
+about('purpose(Predicate) :- output(Predicate, _).', "the purposes").
+about('serves_a_purpose(Requirement) :- serves(Requirement, Purpose), purpose(Purpose).', "the purposes").
+about('has_a_requirement(Doing) :- met_by(_, Doing).', "the purposes").
 about('violation("every_line_is_accounted_for", Path) :- machine_program(Path), !universe_file(Path).', "machine.mg").
-about('violation("every_line_is_accounted_for", Text) :- universe_line(Text), !accounted_for(Text).', "every_line_is_accounted_for").
-about('violation("every_requirement_serves_a_purpose", Requirement) :- about(_, Requirement), !serves_a_purpose(Requirement).', "every_requirement_serves_a_purpose").
-about('violation("every_requirement_serves_a_purpose", Doing) :- does(Doing), !has_a_requirement(Doing).', "every_requirement_serves_a_purpose").
+about('violation("every_line_is_accounted_for", Text) :- universe_line(Text), !accounted_for(Text).', "the lines").
+about('violation("every_requirement_serves_a_purpose", Requirement) :- about(_, Requirement), !serves_a_purpose(Requirement).', "the purposes").
+about('violation("every_requirement_serves_a_purpose", Doing) :- does(Doing), !has_a_requirement(Doing).', "the purposes").
+about('requirement(Requirement) :- met_by(Requirement, _).', "the requirements").
+about('misses_a_step(Requirement) :- requirement(Requirement), does(Doing), !met_by(Requirement, Doing).', "the requirements").
+about('violation("every_requirement_is_specific", Requirement) :- serves(Requirement, Requirement).', "the requirements").
+about('violation("every_requirement_is_specific", Requirement) :- requirement(Requirement), !misses_a_step(Requirement).', "the requirements").
 about('a_law_is_broken() :- violation(_, _).', "the answer").
 about('answer("false") :- a_law_is_broken().', "the answer").
 about('answer("true") :- !a_law_is_broken().', "the answer").
-about('belongs_to("universe.mg", "universe.mg").', "every_file_belongs_to_a_leg").
-about('belongs_to(Path, "machine.mg") :- machine_program(Path).', "every_file_belongs_to_a_leg").
-about('belongs_to(Path, "the machinery") :- language(Path, Language), !readable(Language).', "every_file_belongs_to_a_leg").
-about('in_a_leg(Path) :- belongs_to(Path, Leg), leg(Leg).', "every_file_belongs_to_a_leg").
-about('violation("every_file_belongs_to_a_leg", Path) :- universe_file(Path), !in_a_leg(Path).', "every_file_belongs_to_a_leg").
+about('belongs_to("universe.mg", "universe.mg").', "the leg of each file").
+about('belongs_to(Path, "machine.mg") :- machine_program(Path).', "the leg of each file").
+about('belongs_to(Path, "the machinery") :- language(Path, Language), !readable(Language).', "the leg of each file").
+about('in_a_leg(Path) :- belongs_to(Path, Leg), leg(Leg).', "the leg of each file").
+about('violation("every_file_belongs_to_a_leg", Path) :- universe_file(Path), !in_a_leg(Path).', "the leg of each file").
 about('in_a_case() :- started_by("run_a_case").', "the cases").
 about('case(Case) :- case_answer(Case, _).', "the cases").
 about('running_a_case(Doing, Case) :- case(Case), !in_a_case(), Doing = fn:string:concat("run the case ", Case).', "the cases").
 about('does(Doing) :- running_a_case(Doing, _).', "the cases").
 about('effect(Doing, "run_a_case") :- running_a_case(Doing, _).', "the cases").
 about('gives(Doing, Path, Line) :- running_a_case(Doing, Case), case_adds_line(Case, Path, Line).', "the cases").
-about('broke_in(Case, Law) :- running_a_case(Doing, Case), got(Doing, "violation", Law).', "every_case_comes_out_as_stated").
-about('answered(Case, Answer) :- running_a_case(Doing, Case), got(Doing, "exit", Code), exit_code(Answer, Code).', "every_case_comes_out_as_stated").
-about('missed(Case) :- case_expects(Case, Law), !broke_in(Case, Law).', "every_case_comes_out_as_stated").
-about('came_out_as_stated(Case) :- case_answer(Case, Answer), answered(Case, Answer), !missed(Case).', "every_case_comes_out_as_stated").
-about('shown_failing(Law) :- case_expects(_, Law).', "every_law_is_shown_failing").
-about('violation("every_law_is_shown_failing", Law) :- law(Law), !shown_failing(Law).', "every_law_is_shown_failing").
-about('violation("every_case_comes_out_as_stated", Case) :- case(Case), !in_a_case(), !came_out_as_stated(Case), !case_differs(Case).', "every_case_comes_out_as_stated").
-about('violation("every_case_comes_out_as_stated", Case) :- case_differs(Case), came_out_as_stated(Case).', "every_case_comes_out_as_stated").
+about('broke_in(Case, Law) :- running_a_case(Doing, Case), got(Doing, "violation", Law).', "the outcomes").
+about('answered(Case, Answer) :- running_a_case(Doing, Case), got(Doing, "exit", Code), exit_code(Answer, Code).', "the outcomes").
+about('missed(Case) :- case_expects(Case, Law), !broke_in(Case, Law).', "the outcomes").
+about('came_out_as_stated(Case) :- case_answer(Case, Answer), answered(Case, Answer), !missed(Case).', "the outcomes").
+about('shown_failing(Law) :- case_expects(_, Law).', "the laws").
+about('violation("every_law_is_shown_failing", Law) :- law(Law), !shown_failing(Law).', "the laws").
+about('violation("every_case_comes_out_as_stated", Case) :- case(Case), !in_a_case(), !came_out_as_stated(Case), !case_differs(Case).', "the outcomes").
+about('violation("every_case_comes_out_as_stated", Case) :- case_differs(Case), came_out_as_stated(Case).', "the outcomes").
 about('case_adds_line("a file that is not datalog", "notes.txt", "a note").', "the cases").
 about('case_expects("a file that is not datalog", "the_only_knowledge_is_datalog").', "the cases").
 about('case_answer("a file that is not datalog", "false").', "the cases").
@@ -175,3 +182,9 @@ about('case_answer("a world that cannot load", "broken").', "the cases").
 about('case_expects("a case that differs", "every_case_comes_out_as_stated").', "the cases").
 about('case_answer("a case that differs", "false").', "the cases").
 about('case_differs("a case that differs").', "the cases").
+about('case_adds_line("a requirement that serves itself", "machine.mg", \'serves("a self-serving requirement", "a self-serving requirement").\').', "the cases").
+about('case_expects("a requirement that serves itself", "every_requirement_is_specific").', "the cases").
+about('case_answer("a requirement that serves itself", "false").', "the cases").
+about('case_adds_line("a requirement met by every step", "machine.mg", \'met_by("a requirement met by every step", Doing) :- does(Doing).\').', "the cases").
+about('case_expects("a requirement met by every step", "every_requirement_is_specific").', "the cases").
+about('case_answer("a requirement met by every step", "false").', "the cases").
