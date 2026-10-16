@@ -6,13 +6,42 @@ machine_program("machine.mg").
 leg("universe.mg").
 leg("machine.mg").
 leg("the machinery").
-rebuilt_from(Leg, Other) :- leg(Leg), leg(Other), Leg != Other.
 source_of_truth("universe.mg").
-a_rebuild_replaces(Leg) :- leg(Leg), !source_of_truth(Leg).
-a_rebuild_proposes(Leg) :- source_of_truth(Leg).
 written_by("universe.mg", "the owner").
 written_by("machine.mg", "the builder").
 written_by("the machinery", "the builder").
+
+read_by_the_machinery("does").
+read_by_the_machinery("effect").
+read_by_the_machinery("gives").
+read_by_the_machinery("machine_program").
+read_by_the_machinery("output").
+read_by_the_machinery("answer").
+read_by_the_machinery("exit_code").
+
+supplied_by("got", "the machinery").
+supplied_by("started_by", "the machinery").
+supplied_by("universe_file", "machine.mg").
+supplied_by("comment_in", "machine.mg").
+supplied_by("defines", "machine.mg").
+supplied_by("law", "machine.mg").
+supplied_by("within", "machine.mg").
+supplied_by("case_broke", "machine.mg").
+supplied_by("case_answered", "machine.mg").
+supplied_by("unfired", "machine.mg").
+supplied_by("size", "machine.mg").
+
+Decl got(Doing, Field, Value).
+Decl started_by(Effect).
+Decl universe_file(Path).
+Decl comment_in(Path, Text).
+Decl defines(Path, Predicate).
+Decl law(Law).
+Decl within(Context).
+Decl case_broke(Case, Law).
+Decl case_answered(Case, Answer).
+Decl unfired(Path, Line).
+Decl size(Path, Lines).
 
 written_in(".mg", "mangle").
 written_in(".go", "go").
@@ -24,15 +53,6 @@ has_comments("mangle").
 has_comments("go").
 has_comments("sh").
 
-supplied_by("got", "the machine").
-supplied_by("about", "machine.mg").
-supplied_by("met_by", "machine.mg").
-supplied_by("serves", "machine.mg").
-supplied_by("started_by", "the machine").
-supplied_by("fired", "the machine").
-supplied_by("fired_in_a_case", "the machine").
-
-output("tells", "mangle").
 output("answer", "mangle").
 output("violation", "mangle").
 output("case_broke", "mangle").
@@ -44,161 +64,69 @@ exit_code("true", 0).
 exit_code("false", 1).
 exit_code("broken", 2).
 
-Decl got(Doing, Field, Value).
-Decl about(Text, Requirement).
-Decl met_by(Requirement, Doing).
-Decl serves(Requirement, Purpose).
-Decl started_by(Effect).
-Decl fired(Path, Line).
-Decl fired_in_a_case(Path, Line).
-
-does("list the universe").
-effect("list the universe", "list_a_folder").
-gives("list the universe", "folder", ".").
-
-universe_file(Path) :- got("list the universe", "file", Path).
-tells(Path) :- universe_file(Path).
-
 language(Path, Language) :- universe_file(Path), written_in(Ending, Language), :string:ends_with(Path, Ending).
 known(Path) :- language(Path, _).
-datalog(Path) :- language(Path, Language), readable(Language).
-
-finding_comments(Doing, Path) :- language(Path, Language), has_comments(Language), Doing = fn:string:concat("find comments in ", Path).
-does(Doing) :- finding_comments(Doing, _).
-effect(Doing, "find_comments") :- finding_comments(Doing, _).
-gives(Doing, "path", Path) :- finding_comments(Doing, Path).
-gives(Doing, "language", Language) :- finding_comments(Doing, Path), language(Path, Language).
-
-reading_a_program(Doing, Path) :- datalog(Path), Doing = fn:string:concat("read the program ", Path).
-does(Doing) :- reading_a_program(Doing, _).
-effect(Doing, "read_a_program") :- reading_a_program(Doing, _).
-gives(Doing, "path", Path) :- reading_a_program(Doing, Path).
-defines(Path, Predicate) :- reading_a_program(Doing, Path), got(Doing, "defines", Predicate).
-law(Law) :- reading_a_program(Doing, _), got(Doing, "law", Law).
-clause_line(Path, Line) :- reading_a_program(Doing, Path), got(Doing, "clause", Line).
-unfired(Path, Line) :- clause_line(Path, Line), !fired(Path, Line), !fired_in_a_case(Path, Line).
-
-measuring(Doing, Path) :- known(Path), Doing = fn:string:concat("measure ", Path).
-does(Doing) :- measuring(Doing, _).
-effect(Doing, "read_lines") :- measuring(Doing, _).
-gives(Doing, "path", Path) :- measuring(Doing, Path).
-size(Path, Count) :- measuring(Doing, Path), got(Doing, "line", Line), Line != "" |> do fn:group_by(Path), let Count = fn:count().
-
-violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !known(Path).
-violation("the_only_knowledge_is_datalog", Path) :- finding_comments(Doing, Path), got(Doing, "comment", _).
-violation("each_word_has_one_supplier", Path) :- defines(Path, Predicate), supplied_by(Predicate, Supplier), Supplier != Path.
-
-does("read the universe").
-effect("read the universe", "read_lines").
-gives("read the universe", "path", "universe.mg").
-
-universe_line(Text) :- got("read the universe", "line", Text), Text != "".
-observed(Doing) :- got(Doing, _, _).
-met(Requirement) :- met_by(Requirement, Doing), observed(Doing).
-accounted_for(Text) :- about(Text, Requirement), met(Requirement).
-purpose(Law) :- law(Law).
-purpose(Predicate) :- output(Predicate, _).
-serves_a_purpose(Requirement) :- serves(Requirement, Purpose), purpose(Purpose).
-has_a_requirement(Doing) :- met_by(_, Doing).
-
-violation("every_line_is_accounted_for", Path) :- machine_program(Path), !universe_file(Path).
-violation("every_line_is_accounted_for", Text) :- universe_line(Text), !accounted_for(Text).
-violation("every_requirement_serves_a_purpose", Requirement) :- about(_, Requirement), !serves_a_purpose(Requirement).
-violation("every_requirement_serves_a_purpose", Doing) :- does(Doing), !has_a_requirement(Doing).
-
-requirement(Requirement) :- met_by(Requirement, _).
-misses_a_step(Requirement) :- requirement(Requirement), does(Doing), !met_by(Requirement, Doing).
-
-violation("every_requirement_is_specific", Requirement) :- serves(Requirement, Requirement).
-violation("every_requirement_is_specific", Requirement) :- requirement(Requirement), !misses_a_step(Requirement).
-
-a_law_is_broken() :- violation(_, _).
-answer("false") :- a_law_is_broken().
-answer("true") :- !a_law_is_broken().
 
 belongs_to("universe.mg", "universe.mg").
 belongs_to(Path, "machine.mg") :- machine_program(Path).
 belongs_to(Path, "the machinery") :- language(Path, Language), !readable(Language).
 in_a_leg(Path) :- belongs_to(Path, Leg), leg(Leg).
 
-violation("every_file_belongs_to_a_leg", Path) :- universe_file(Path), !in_a_leg(Path).
-
-in_a_case() :- started_by("run_a_case").
+in_a_case() :- within("a case").
 case(Case) :- case_answer(Case, _).
-running_a_case(Doing, Case) :- case(Case), !in_a_case(), Doing = fn:string:concat("run the case ", Case).
-does(Doing) :- running_a_case(Doing, _).
-effect(Doing, "run_a_case") :- running_a_case(Doing, _).
-gives(Doing, Path, Line) :- running_a_case(Doing, Case), case_adds_line(Case, Path, Line).
-case_broke(Case, Law) :- running_a_case(Doing, Case), got(Doing, "violation", Law).
-case_answered(Case, Answer) :- running_a_case(Doing, Case), got(Doing, "exit", Code), exit_code(Answer, Code).
 missed(Case) :- case_expects(Case, Law), !case_broke(Case, Law).
 came_out_as_stated(Case) :- case_answer(Case, Answer), case_answered(Case, Answer), !missed(Case).
-off_from_stated(Case) :- case(Case), !in_a_case(), !came_out_as_stated(Case).
+expects_no_law(Case) :- case_expects(Case, Law), !law(Law).
 shown_failing(Law) :- case_broke(_, Law).
 shown_failing(Law) :- in_a_case(), case_expects(_, Law).
-expects_no_law(Case) :- case_expects(Case, Law), !law(Law).
 
+violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !known(Path).
+violation("the_only_knowledge_is_datalog", Path) :- comment_in(Path, _).
+violation("each_word_has_one_supplier", Path) :- defines(Path, Predicate), supplied_by(Predicate, Supplier), Supplier != Path.
+violation("every_file_belongs_to_a_leg", Path) :- universe_file(Path), !in_a_leg(Path).
+violation("the_world_sees_itself", "universe.mg") :- !universe_file("universe.mg").
+violation("the_world_sees_itself", Path) :- machine_program(Path), !universe_file(Path).
 violation("every_law_is_shown_failing", Law) :- law(Law), !shown_failing(Law).
-violation("every_case_comes_out_as_stated", Case) :- off_from_stated(Case).
+violation("every_case_comes_out_as_stated", Case) :- case(Case), !in_a_case(), !came_out_as_stated(Case).
 violation("every_case_comes_out_as_stated", Case) :- expects_no_law(Case).
 
-root_law("every_line_fires").
-root_mark("off_from_stated(").
-root_mark("every_line_fires").
-at_the_root(Line) :- root_mark(Mark), clause_line(_, Line), :string:contains(Line, Mark).
-shown_failing(Law) :- root_law(Law).
+a_law_is_broken() :- violation(_, _).
+answer("false") :- a_law_is_broken().
+answer("true") :- !a_law_is_broken().
 
-violation("every_line_fires", Line) :- unfired(_, Line), !at_the_root(Line), !in_a_case().
+case_answer("the world as it stands", "true").
 
 case_adds_line("a file that is not datalog", "notes.txt", "a note").
 case_expects("a file that is not datalog", "the_only_knowledge_is_datalog").
 case_answer("a file that is not datalog", "false").
 
-case_adds_line("a program that fakes an observation", "machine.mg", 'got("list the universe", "file", "nowhere").').
+case_adds_line("a comment", "machine.mg", "# a note").
+case_expects("a comment", "the_only_knowledge_is_datalog").
+case_answer("a comment", "false").
+
+case_adds_line("a program that fakes an observation", "machine.mg", 'got("a step", "file", "nowhere").').
 case_expects("a program that fakes an observation", "each_word_has_one_supplier").
 case_answer("a program that fakes an observation", "false").
 
-case_adds_line("a line nobody accounts for", "universe.mg", 'lonely("a").').
-case_expects("a line nobody accounts for", "every_line_is_accounted_for").
-case_answer("a line nobody accounts for", "false").
-
-case_adds_line("a requirement with no purpose", "machine.mg", 'about("no such line", "a requirement with no purpose").').
-case_expects("a requirement with no purpose", "every_requirement_serves_a_purpose").
-case_answer("a requirement with no purpose", "false").
+case_adds_line("a spec that observes for itself", "universe.mg", 'universe_file("ghost.txt").').
+case_expects("a spec that observes for itself", "each_word_has_one_supplier").
+case_answer("a spec that observes for itself", "false").
 
 case_adds_line("a file outside the legs", "notes.mg", 'note("a").').
 case_expects("a file outside the legs", "every_file_belongs_to_a_leg").
 case_answer("a file outside the legs", "false").
 
+case_adds_line("a machine program that is missing", "universe.mg", 'machine_program("missing.mg").').
+case_expects("a machine program that is missing", "the_world_sees_itself").
+case_answer("a machine program that is missing", "false").
+
 case_adds_line("a law with no case", "machine.mg", 'violation("a_law_with_no_case", Path) :- universe_file(Path), :string:ends_with(Path, ".txt").').
 case_expects("a law with no case", "every_law_is_shown_failing").
 case_answer("a law with no case", "false").
-
-case_adds_line("a world that cannot load", "universe.mg", "tells(").
-case_answer("a world that cannot load", "broken").
 
 case_adds_line("a case that expects a law nobody laid down", "machine.mg", 'case_expects("a ghost case", "a_law_nobody_laid_down").').
 case_expects("a case that expects a law nobody laid down", "every_case_comes_out_as_stated").
 case_answer("a case that expects a law nobody laid down", "false").
 
-case_adds_line("a requirement that serves itself", "machine.mg", 'serves("a self-serving requirement", "a self-serving requirement").').
-case_expects("a requirement that serves itself", "every_requirement_is_specific").
-case_answer("a requirement that serves itself", "false").
-
-case_adds_line("a requirement met by every step", "machine.mg", 'met_by("a requirement met by every step", Doing) :- does(Doing).').
-case_expects("a requirement met by every step", "every_requirement_is_specific").
-case_answer("a requirement met by every step", "false").
-
-case_adds_line("a comment", "machine.mg", "# a note").
-case_expects("a comment", "the_only_knowledge_is_datalog").
-case_answer("a comment", "false").
-
-case_adds_line("a step with no requirement", "machine.mg", 'does("an idle step").').
-case_adds_line("a step with no requirement", "machine.mg", 'effect("an idle step", "list_a_folder").').
-case_adds_line("a step with no requirement", "machine.mg", 'gives("an idle step", "folder", ".").').
-case_expects("a step with no requirement", "every_requirement_serves_a_purpose").
-case_answer("a step with no requirement", "false").
-
-case_adds_line("a machine program that is missing", "universe.mg", 'machine_program("missing.mg").').
-case_expects("a machine program that is missing", "every_line_is_accounted_for").
-case_answer("a machine program that is missing", "false").
+case_adds_line("a world that cannot load", "universe.mg", "answer(").
+case_answer("a world that cannot load", "broken").
