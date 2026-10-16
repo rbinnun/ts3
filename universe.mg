@@ -38,6 +38,7 @@ output("violation", "mangle").
 output("case_broke", "mangle").
 output("case_answered", "mangle").
 output("unfired", "mangle").
+output("size", "mangle").
 
 exit_code("true", 0).
 exit_code("false", 1).
@@ -76,6 +77,12 @@ defines(Path, Predicate) :- reading_a_program(Doing, Path), got(Doing, "defines"
 law(Law) :- reading_a_program(Doing, _), got(Doing, "law", Law).
 clause_line(Path, Line) :- reading_a_program(Doing, Path), got(Doing, "clause", Line).
 unfired(Path, Line) :- clause_line(Path, Line), !fired(Path, Line), !fired_in_a_case(Path, Line).
+
+measuring(Doing, Path) :- known(Path), Doing = fn:string:concat("measure ", Path).
+does(Doing) :- measuring(Doing, _).
+effect(Doing, "read_lines") :- measuring(Doing, _).
+gives(Doing, "path", Path) :- measuring(Doing, Path).
+size(Path, Count) :- measuring(Doing, Path), got(Doing, "line", Line), Line != "" |> do fn:group_by(Path), let Count = fn:count().
 
 violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !known(Path).
 violation("the_only_knowledge_is_datalog", Path) :- finding_comments(Doing, Path), got(Doing, "comment", _).
@@ -134,6 +141,14 @@ expects_no_law(Case) :- case_expects(Case, Law), !law(Law).
 violation("every_law_is_shown_failing", Law) :- law(Law), !shown_failing(Law).
 violation("every_case_comes_out_as_stated", Case) :- off_from_stated(Case).
 violation("every_case_comes_out_as_stated", Case) :- expects_no_law(Case).
+
+root_law("every_line_fires").
+root_mark("off_from_stated(").
+root_mark("every_line_fires").
+at_the_root(Line) :- root_mark(Mark), clause_line(_, Line), :string:contains(Line, Mark).
+shown_failing(Law) :- root_law(Law).
+
+violation("every_line_fires", Line) :- unfired(_, Line), !at_the_root(Line), !in_a_case().
 
 case_adds_line("a file that is not datalog", "notes.txt", "a note").
 case_expects("a file that is not datalog", "the_only_knowledge_is_datalog").
