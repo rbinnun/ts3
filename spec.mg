@@ -21,6 +21,7 @@ read_by("shows", "report.go").
 read_by("shows_change", "report.go").
 read_by("opens_into", "report.go").
 read_by("explained_by", "report.go").
+read_by("printed_in", "report.go").
 
 supplied_by("got", "tools.go").
 supplied_by("started_by", "engine.go").
@@ -151,6 +152,12 @@ output("answered").
 output("unfired").
 output("size").
 output("rests_on").
+output("concept").
+output("shows").
+output("shows_change").
+output("opens_into").
+output("explained_by").
+printed_in("mangle").
 
 concept("The folder conforms to the spec").
 concept(Law) :- law(Law).
