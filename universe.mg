@@ -30,8 +30,10 @@ supplied_by("met_by", "machine.mg").
 supplied_by("serves", "machine.mg").
 supplied_by("started_by", "the machine").
 supplied_by("fired", "the machine").
+supplied_by("fired_in_a_case", "the machine").
 
 output("tells", "mangle").
+output("answer", "mangle").
 output("violation", "mangle").
 output("case_broke", "mangle").
 output("case_answered", "mangle").
@@ -47,6 +49,7 @@ Decl met_by(Requirement, Doing).
 Decl serves(Requirement, Purpose).
 Decl started_by(Effect).
 Decl fired(Path, Line).
+Decl fired_in_a_case(Path, Line).
 
 does("list the universe").
 effect("list the universe", "list_a_folder").
@@ -72,7 +75,7 @@ gives(Doing, "path", Path) :- reading_a_program(Doing, Path).
 defines(Path, Predicate) :- reading_a_program(Doing, Path), got(Doing, "defines", Predicate).
 law(Law) :- reading_a_program(Doing, _), got(Doing, "law", Law).
 clause_line(Path, Line) :- reading_a_program(Doing, Path), got(Doing, "clause", Line).
-unfired(Path, Line) :- clause_line(Path, Line), !fired(Path, Line).
+unfired(Path, Line) :- clause_line(Path, Line), !fired(Path, Line), !fired_in_a_case(Path, Line).
 
 violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !known(Path).
 violation("the_only_knowledge_is_datalog", Path) :- finding_comments(Doing, Path), got(Doing, "comment", _).
@@ -126,11 +129,11 @@ came_out_as_stated(Case) :- case_answer(Case, Answer), case_answered(Case, Answe
 off_from_stated(Case) :- case(Case), !in_a_case(), !came_out_as_stated(Case).
 shown_failing(Law) :- case_broke(_, Law).
 shown_failing(Law) :- in_a_case(), case_expects(_, Law).
-shown_failing("every_case_comes_out_as_stated") :- off_from_stated(Case), case_differs(Case).
+expects_no_law(Case) :- case_expects(Case, Law), !law(Law).
 
 violation("every_law_is_shown_failing", Law) :- law(Law), !shown_failing(Law).
-violation("every_case_comes_out_as_stated", Case) :- off_from_stated(Case), !case_differs(Case).
-violation("every_case_comes_out_as_stated", Case) :- case_differs(Case), came_out_as_stated(Case).
+violation("every_case_comes_out_as_stated", Case) :- off_from_stated(Case).
+violation("every_case_comes_out_as_stated", Case) :- expects_no_law(Case).
 
 case_adds_line("a file that is not datalog", "notes.txt", "a note").
 case_expects("a file that is not datalog", "the_only_knowledge_is_datalog").
@@ -159,9 +162,9 @@ case_answer("a law with no case", "false").
 case_adds_line("a world that cannot load", "universe.mg", "tells(").
 case_answer("a world that cannot load", "broken").
 
-case_expects("a case that differs", "every_case_comes_out_as_stated").
-case_answer("a case that differs", "false").
-case_differs("a case that differs").
+case_adds_line("a case that expects a law nobody laid down", "machine.mg", 'case_expects("a ghost case", "a_law_nobody_laid_down").').
+case_expects("a case that expects a law nobody laid down", "every_case_comes_out_as_stated").
+case_answer("a case that expects a law nobody laid down", "false").
 
 case_adds_line("a requirement that serves itself", "machine.mg", 'serves("a self-serving requirement", "a self-serving requirement").').
 case_expects("a requirement that serves itself", "every_requirement_is_specific").
