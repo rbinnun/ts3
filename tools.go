@@ -391,34 +391,84 @@ func try(w world, input ast.Constant) ([]found, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	ran := cmd.Run()
-	var heard struct {
-		Answer string             `json:"answer"`
-		Facts  map[string][][]any `json:"facts"`
+	answer, facts, ok := heardInMangle(stdout.String())
+	if !ok {
+		answer, facts, ok = heardInJSON(stdout.Bytes())
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &heard); err != nil || heard.Answer == "" {
+	if !ok {
 		return nil, fmt.Errorf("the changed folder gave no answer (%v): %s", ran, strings.TrimSpace(stderr.String()))
 	}
-	out := []found{{"answer", ast.String(heard.Answer)}}
-	for _, row := range heard.Facts["violation"] {
+	out := []found{{"answer", ast.String(answer)}}
+	for _, row := range facts["violation"] {
 		if len(row) == 0 {
 			continue
 		}
-		if law, ok := row[0].(string); ok {
-			out = append(out, found{"broke", ast.String(law)})
+		if _, err := text(row[0]); err == nil {
+			out = append(out, found{"broke", row[0]})
 		}
 	}
-	for _, row := range heard.Facts["unfired"] {
+	for _, row := range facts["unfired"] {
 		if len(row) != 2 {
 			continue
 		}
-		path, ok1 := row[0].(string)
-		rule, ok2 := row[1].(string)
-		if ok1 && ok2 {
-			fst, snd := ast.String(path), ast.String(rule)
+		_, err1 := text(row[0])
+		_, err2 := text(row[1])
+		if err1 == nil && err2 == nil {
+			fst, snd := row[0], row[1]
 			out = append(out, found{"unfired", ast.Pair(&fst, &snd)})
 		}
 	}
 	return out, nil
+}
+
+func heardInMangle(said string) (string, map[string][][]ast.Constant, bool) {
+	unit, err := parse.Unit(strings.NewReader(said))
+	if err != nil {
+		return "", nil, false
+	}
+	facts := map[string][][]ast.Constant{}
+	for _, clause := range unit.Clauses {
+		if len(clause.Premises) > 0 || clause.Transform != nil {
+			return "", nil, false
+		}
+		row := make([]ast.Constant, len(clause.Head.Args))
+		for i, arg := range clause.Head.Args {
+			row[i], _ = arg.(ast.Constant)
+		}
+		facts[clause.Head.Predicate.Symbol] = append(facts[clause.Head.Predicate.Symbol], row)
+	}
+	answers := facts["answer"]
+	if len(answers) != 1 || len(answers[0]) != 1 {
+		return "", nil, false
+	}
+	answer, err := text(answers[0][0])
+	if err != nil || answer == "" {
+		return "", nil, false
+	}
+	return answer, facts, true
+}
+
+func heardInJSON(said []byte) (string, map[string][][]ast.Constant, bool) {
+	var heard struct {
+		Answer string             `json:"answer"`
+		Facts  map[string][][]any `json:"facts"`
+	}
+	if err := json.Unmarshal(said, &heard); err != nil || heard.Answer == "" {
+		return "", nil, false
+	}
+	facts := map[string][][]ast.Constant{}
+	for name, rows := range heard.Facts {
+		for _, row := range rows {
+			consts := make([]ast.Constant, len(row))
+			for i, value := range row {
+				if s, ok := value.(string); ok {
+					consts[i] = ast.String(s)
+				}
+			}
+			facts[name] = append(facts[name], consts)
+		}
+	}
+	return heard.Answer, facts, true
 }
 
 func copyFolder(from, to string) error {

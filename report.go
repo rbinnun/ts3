@@ -109,7 +109,27 @@ func (r *run) page() page {
 	return p
 }
 
-func (r *run) tell() {
+var printers = map[string]func(r *run) string{
+	"json":   (*run).inJSON,
+	"mangle": (*run).inMangle,
+}
+
+func (m *model) printer() (func(r *run) string, error) {
+	languages := m.column("printed_in")
+	switch {
+	case len(languages) == 0:
+		return (*run).inJSON, nil
+	case len(languages) > 1:
+		return (*run).inJSON, fmt.Errorf("the spec asks for the output printed in %d languages instead of one: %v", len(languages), languages)
+	}
+	say, ok := printers[languages[0]]
+	if !ok {
+		return (*run).inJSON, fmt.Errorf("there is no way to print the output in %s", languages[0])
+	}
+	return say, nil
+}
+
+func (r *run) inJSON() string {
 	compact := func(v any) string {
 		b, _ := json.Marshal(v)
 		return string(b)
@@ -135,14 +155,54 @@ func (r *run) tell() {
 		}
 		said.WriteString("\n  ")
 	}
-	said.WriteString("}\n}")
-	fmt.Println(said.String())
-	for _, problem := range r.problems {
-		fmt.Fprintln(os.Stderr, problem)
+	said.WriteString("}\n}\n")
+	return said.String()
+}
+
+func mangle(c ast.Constant) string {
+	if s, err := text(c); err == nil {
+		return ast.String(strings.ToValidUTF8(s, "\uFFFD")).String()
 	}
+	return c.String()
+}
+
+func (r *run) inMangle() string {
+	var said strings.Builder
+	fact := func(name string, args ...ast.Constant) {
+		parts := make([]string, len(args))
+		for i, arg := range args {
+			parts[i] = mangle(arg)
+		}
+		fmt.Fprintf(&said, "%s(%s).\n", name, strings.Join(parts, ", "))
+	}
+	fact("answer", ast.String(r.answer))
+	for _, problem := range r.problems {
+		fact("problem", ast.String(problem))
+	}
+	if r.answer != "broken" {
+		for _, name := range r.full.column("output") {
+			said.WriteString("\n")
+			for _, row := range r.full.facts(name) {
+				fact(name, row...)
+			}
+		}
+	}
+	return said.String()
+}
+
+func (r *run) tell() {
 	best := r.full
 	if best == nil {
 		best = r.stated
+	}
+	say, err := best.printer()
+	if err != nil {
+		r.fail("%v", err)
+		r.answer = "broken"
+	}
+	fmt.Print(say(r))
+	for _, problem := range r.problems {
+		fmt.Fprintln(os.Stderr, problem)
 	}
 	files := best.column("output_file")
 	if len(files) == 0 {
