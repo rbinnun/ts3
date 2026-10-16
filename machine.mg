@@ -11,6 +11,20 @@ case_adds_line("a machine that is not the one asked for", "machine.mg", 'mangle_
 case_expects("a machine that is not the one asked for", "the_machine_is_the_one_asked_for").
 case_answer("a machine that is not the one asked for", "false").
 
+case_adds_line("a machine from another module", "machine.mg", 'mangle_module("example.org/another/mangle").').
+case_expects("a machine from another module", "the_machine_is_the_one_asked_for").
+case_answer("a machine from another module", "false").
+
+case_adds_line("a machine started another way", "machine.mg", 'entry_point("elsewhere.sh").').
+case_expects("a machine started another way", "the_machine_is_the_one_asked_for").
+case_answer("a machine started another way", "false").
+
+case_adds_line("a machine that breaks with another code", "machine.mg", 'exit_code("broken", 3).').
+case_expects("a machine that breaks with another code", "the_machine_is_the_one_asked_for").
+case_answer("a machine that breaks with another code", "false").
+
+case_answer("the world as it stands", "true").
+
 gives(Doing, "laws_in", "violation") :- reading_a_program(Doing, _).
 
 met_by("universe.mg", "read the universe").
@@ -36,6 +50,7 @@ met_by("the outcomes", Doing) :- running_a_case(Doing, _).
 met_by("the outcomes", "know the machine") :- got("know the machine", "started_by", "run_a_case").
 met_by("the laws", Doing) :- reading_a_program(Doing, _).
 met_by("the clauses", Doing) :- reading_a_program(Doing, _).
+met_by("the sizes", Doing) :- measuring(Doing, _).
 met_by("the answer", "know the machine").
 
 serves("universe.mg", "every_line_is_accounted_for").
@@ -57,6 +72,8 @@ serves("the cases", "every_law_is_shown_failing").
 serves("the outcomes", "every_case_comes_out_as_stated").
 serves("the laws", "every_law_is_shown_failing").
 serves("the clauses", "unfired").
+serves("the clauses", "every_line_fires").
+serves("the sizes", "size").
 serves("the answer", "violation").
 serves("the answer", "the_machine_is_the_one_asked_for").
 
@@ -96,6 +113,7 @@ about('output("violation", "mangle").', "the answer").
 about('output("case_broke", "mangle").', "the outcomes").
 about('output("case_answered", "mangle").', "the outcomes").
 about('output("unfired", "mangle").', "the clauses").
+about('output("size", "mangle").', "the sizes").
 about('exit_code("true", 0).', "the answer").
 about('exit_code("false", 1).', "the answer").
 about('exit_code("broken", 2).', "the answer").
@@ -127,6 +145,11 @@ about('defines(Path, Predicate) :- reading_a_program(Doing, Path), got(Doing, "d
 about('law(Law) :- reading_a_program(Doing, _), got(Doing, "law", Law).', "the purposes").
 about('clause_line(Path, Line) :- reading_a_program(Doing, Path), got(Doing, "clause", Line).', "the clauses").
 about('unfired(Path, Line) :- clause_line(Path, Line), !fired(Path, Line), !fired_in_a_case(Path, Line).', "the clauses").
+about('measuring(Doing, Path) :- known(Path), Doing = fn:string:concat("measure ", Path).', "the sizes").
+about('does(Doing) :- measuring(Doing, _).', "the sizes").
+about('effect(Doing, "read_lines") :- measuring(Doing, _).', "the sizes").
+about('gives(Doing, "path", Path) :- measuring(Doing, Path).', "the sizes").
+about('size(Path, Count) :- measuring(Doing, Path), got(Doing, "line", Line), Line != "" |> do fn:group_by(Path), let Count = fn:count().', "the sizes").
 about('violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !known(Path).', "the languages").
 about('violation("the_only_knowledge_is_datalog", Path) :- finding_comments(Doing, Path), got(Doing, "comment", _).', "the languages").
 about('violation("each_word_has_one_supplier", Path) :- defines(Path, Predicate), supplied_by(Predicate, Supplier), Supplier != Path.', "the suppliers").
@@ -174,6 +197,12 @@ about('shown_failing(Law) :- in_a_case(), case_expects(_, Law).', "the laws").
 about('violation("every_law_is_shown_failing", Law) :- law(Law), !shown_failing(Law).', "the laws").
 about('violation("every_case_comes_out_as_stated", Case) :- off_from_stated(Case).', "the outcomes").
 about('violation("every_case_comes_out_as_stated", Case) :- expects_no_law(Case).', "the outcomes").
+about('root_law("every_line_fires").', "the laws").
+about('root_mark("off_from_stated(").', "the clauses").
+about('root_mark("every_line_fires").', "the clauses").
+about('at_the_root(Line) :- root_mark(Mark), clause_line(_, Line), :string:contains(Line, Mark).', "the clauses").
+about('shown_failing(Law) :- root_law(Law).', "the laws").
+about('violation("every_line_fires", Line) :- unfired(_, Line), !at_the_root(Line), !in_a_case().', "the clauses").
 about('case_adds_line("a file that is not datalog", "notes.txt", "a note").', "the cases").
 about('case_expects("a file that is not datalog", "the_only_knowledge_is_datalog").', "the cases").
 about('case_answer("a file that is not datalog", "false").', "the cases").
