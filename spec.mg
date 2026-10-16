@@ -10,8 +10,6 @@ part_of_the_machine("go.sum").
 output_file("report.html").
 
 read_by("does", "engine.go").
-read_by("effect", "engine.go").
-read_by("gives", "engine.go").
 read_by("workflow", "engine.go").
 read_by("conforms", "engine.go").
 read_by("exit_code", "engine.go").
@@ -40,6 +38,7 @@ supplied_by("rule_for", "workflow.mg").
 supplied_by("rule_for_law", "workflow.mg").
 supplied_by("rule_uses", "workflow.mg").
 supplied_by("rule_in", "workflow.mg").
+supplied_by("problem", "engine.go").
 
 Decl got(Doing, Field, Value).
 Decl started_by(Effect).
@@ -58,6 +57,27 @@ Decl rule_for(Rule, Word).
 Decl rule_for_law(Rule, Law).
 Decl rule_uses(Rule, Word).
 Decl rule_in(File, Rule).
+Decl problem(Text).
+Decl does(Step, Tool, Input).
+
+gives("list", "file").
+gives("count lines", "lines").
+gives("find comments", "comment").
+gives("parse", "rule").
+gives("read a rule", "head").
+gives("read a rule", "first argument").
+gives("read a rule", "uses").
+gives("see what fired", "fired").
+gives("try", "conforms").
+gives("try", "broke").
+gives("try", "unfired").
+
+in_the_catalog(Tool) :- gives(Tool, _).
+
+violation("Every step uses a tool in the catalog", Step) :- does(Step, Tool, _), !in_the_catalog(Tool).
+
+adds_line("a step with a tool nobody has", "workflow.mg", 'does("guess", "guess", "x").').
+must_break("a step with a tool nobody has", "Every step uses a tool in the catalog").
 
 has_a_role(Path) :- spec(Path).
 has_a_role(Path) :- workflow(Path).
@@ -160,6 +180,7 @@ output("shows_change").
 output("opens_into").
 output("explained_by").
 output("rule_in").
+output("problem").
 printed_in("mangle").
 
 concept("The folder conforms to the spec").
