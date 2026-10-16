@@ -18,8 +18,10 @@ import (
 	"codeberg.org/TauCeti/mangle-go/ast"
 	"codeberg.org/TauCeti/mangle-go/engine"
 	"codeberg.org/TauCeti/mangle-go/factstore"
+	"codeberg.org/TauCeti/mangle-go/packages"
 	"codeberg.org/TauCeti/mangle-go/parse"
 	"codeberg.org/TauCeti/mangle-go/parse/gen"
+	"codeberg.org/TauCeti/mangle-go/unionfind"
 	"github.com/antlr4-go/antlr/v4"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -36,6 +38,7 @@ var (
 	answerSym   = ast.PredicateSym{Symbol: "answer", Arity: 1}
 	exitCodeSym = ast.PredicateSym{Symbol: "exit_code", Arity: 2}
 	startedSym  = ast.PredicateSym{Symbol: "started_by", Arity: 1}
+	firedSym    = ast.PredicateSym{Symbol: "fired", Arity: 2}
 )
 
 const (
@@ -62,6 +65,13 @@ func (m *machine) at(path string) string {
 		return filepath.Clean(path)
 	}
 	return filepath.Join(m.dir, path)
+}
+
+func (m *machine) rel(path string) string {
+	if r, err := filepath.Rel(m.dir, m.at(path)); err == nil {
+		return r
+	}
+	return path
 }
 
 type effectFunc func(m *machine, in map[string][]ast.Constant) ([]result, error)
@@ -109,23 +119,179 @@ func main() {
 	os.Exit(code)
 }
 
-type evaluator func(got []ast.Atom) (factstore.FactStore, error)
+type evaluator func(in []ast.Atom) (factstore.FactStore, []ast.Atom, error)
 
-func parseFile(path string) (parse.SourceUnit, error) {
+type program struct {
+	path  string
+	unit  parse.SourceUnit
+	lines []string
+}
+
+func parseFile(path string) (program, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return parse.SourceUnit{}, err
+		return program{}, err
 	}
 	unit, err := parse.Unit(bytes.NewReader(src))
 	if err != nil {
-		return parse.SourceUnit{}, fmt.Errorf("parsing %s: %w", path, err)
+		return program{}, fmt.Errorf("parsing %s: %w", path, err)
 	}
-	return unit, nil
+	lines, err := clauseLines(string(src))
+	if err != nil {
+		return program{}, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	if len(lines) != len(unit.Clauses) {
+		return program{}, fmt.Errorf("parsing %s: found %d clauses on %d lines", path, len(unit.Clauses), len(lines))
+	}
+	return program{path: path, unit: unit, lines: lines}, nil
 }
 
-func compile(names []string, units []parse.SourceUnit) (evaluator, error) {
+func clauseLines(src string) ([]string, error) {
+	lexer := gen.NewMangleLexer(antlr.NewInputStream(src))
+	lexer.RemoveErrorListeners()
+	parser := gen.NewMangleParser(antlr.NewCommonTokenStream(lexer, antlr.TokenDefaultChannel))
+	parser.RemoveErrorListeners()
+	errs := &lexErrors{DefaultErrorListener: antlr.NewDefaultErrorListener()}
+	lexer.AddErrorListener(errs)
+	parser.AddErrorListener(errs)
+	tree := parser.Start_()
+	if len(errs.errs) > 0 {
+		return nil, errors.New(strings.Join(errs.errs, "; "))
+	}
+	text := strings.Split(src, "\n")
+	var out []string
+	for _, c := range tree.Program().AllClause() {
+		from, to := c.GetStart().GetLine(), c.GetStop().GetLine()
+		if from < 1 || to < from || to > len(text) {
+			return nil, fmt.Errorf("a clause spans lines %d to %d of %d", from, to, len(text))
+		}
+		var lines []string
+		for _, l := range text[from-1 : to] {
+			lines = append(lines, strings.TrimSuffix(l, "\r"))
+		}
+		out = append(out, strings.Join(lines, "\n"))
+	}
+	return out, nil
+}
+
+type clauseAt struct {
+	path, line string
+}
+
+type sourceClause struct {
+	at  clauseAt
+	key string
+}
+
+func firingKey(c ast.Clause) string {
+	var b strings.Builder
+	b.WriteString(c.Head.String())
+	if c.Transform != nil && !c.Transform.IsLetTransform() {
+		b.WriteString(" |> ")
+		b.WriteString(c.Transform.String())
+		return b.String()
+	}
+	for _, p := range c.Premises {
+		b.WriteString(" \x00 ")
+		b.WriteString(p.String())
+	}
+	if c.Transform != nil {
+		b.WriteString(" |> ")
+		b.WriteString(c.Transform.String())
+	}
+	return b.String()
+}
+
+type firings map[string]bool
+
+func (f firings) RuleFired(rule ast.Clause, _ ast.Atom, _ unionfind.UnionFind, _ []ast.Atom) {
+	f[firingKey(rule)] = true
+}
+
+func (f firings) LetEmit(rule ast.Clause, _ ast.Atom, _ ast.ConstSubstList, _ ast.Atom) {
+	f[firingKey(rule)] = true
+}
+
+func (f firings) DoEmit(rule ast.Clause, _ ast.Atom, _ []ast.Constant, _ []ast.Atom, _ ast.Atom) {
+	f[firingKey(rule)] = true
+}
+
+func analyze(programs []program) (*analysis.ProgramInfo, []sourceClause, error) {
+	pkgs := map[string]*packages.Package{}
+	members := map[string][]int{}
+	var order []string
+	for i, p := range programs {
+		pkg, err := packages.Extract(p.unit)
+		if err != nil {
+			return nil, nil, err
+		}
+		if have, ok := pkgs[pkg.Name]; ok {
+			if err := have.Merge(pkg); err != nil {
+				return nil, nil, err
+			}
+		} else {
+			pkgs[pkg.Name] = &pkg
+			order = append(order, pkg.Name)
+		}
+		members[pkg.Name] = append(members[pkg.Name], i)
+	}
+	var decls []ast.Decl
+	var clauses []ast.Clause
+	var at []clauseAt
+	for _, name := range order {
+		ds, err := pkgs[name].Decls()
+		if err != nil {
+			return nil, nil, err
+		}
+		cs, err := pkgs[name].Clauses()
+		if err != nil {
+			return nil, nil, err
+		}
+		decls = append(decls, ds...)
+		clauses = append(clauses, cs...)
+		for _, i := range members[name] {
+			for _, line := range programs[i].lines {
+				at = append(at, clauseAt{programs[i].path, line})
+			}
+		}
+	}
+	if len(at) != len(clauses) {
+		return nil, nil, fmt.Errorf("found %d clauses on %d lines", len(clauses), len(at))
+	}
+	analyzer, err := analysis.New(nil, decls, analysis.NoBoundsChecking)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := analyzer.Analyze(clauses)
+	if err != nil {
+		return nil, nil, err
+	}
+	sources := make([]sourceClause, 0, len(clauses))
+	rule := 0
+	for i, c := range clauses {
+		s := sourceClause{at: at[i]}
+		if c.Premises != nil {
+			if rule == len(info.Rules) {
+				return nil, nil, fmt.Errorf("found more rules than the analysis kept")
+			}
+			s.key = firingKey(info.Rules[rule])
+			rule++
+		}
+		sources = append(sources, s)
+	}
+	if rule != len(info.Rules) {
+		return nil, nil, fmt.Errorf("the analysis kept %d rules, found %d", len(info.Rules), rule)
+	}
+	return info, sources, nil
+}
+
+func compile(programs []program) (evaluator, error) {
+	var names []string
+	for _, p := range programs {
+		names = append(names, p.path)
+	}
 	what := strings.Join(names, " with ")
-	info, err := analysis.Analyze(units, nil)
+	info, sources, err := analyze(programs)
 	if err != nil {
 		return nil, fmt.Errorf("analyzing %s: %w", what, err)
 	}
@@ -137,14 +303,54 @@ func compile(names []string, units []parse.SourceUnit) (evaluator, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stratifying %s: %w", what, err)
 	}
-	return func(got []ast.Atom) (factstore.FactStore, error) {
+	return func(in []ast.Atom) (factstore.FactStore, []ast.Atom, error) {
 		store := factstore.NewSimpleInMemoryStore()
-		for _, g := range got {
-			store.Add(g)
+		for _, a := range in {
+			store.Add(a)
 		}
-		_, err := engine.EvalStratifiedProgramWithStats(info, strata, predToStratum, store)
-		return store, err
+		seen := firings{}
+		if _, err := engine.EvalStratifiedProgramWithStats(info, strata, predToStratum, store, engine.WithDerivationRecorder(seen)); err != nil {
+			return nil, nil, err
+		}
+		var fired []ast.Atom
+		told := map[clauseAt]bool{}
+		for _, s := range sources {
+			if told[s.at] || (s.key != "" && !seen[s.key]) {
+				continue
+			}
+			told[s.at] = true
+			fired = append(fired, ast.NewAtom(firedSym.Symbol, ast.String(s.at.path), ast.String(s.at.line)))
+		}
+		return store, fired, nil
 	}, nil
+}
+
+func settle(eval evaluator, got []ast.Atom) (factstore.FactStore, error) {
+	_, fired, err := eval(got)
+	if err != nil {
+		return nil, err
+	}
+	known := map[string]bool{}
+	for _, f := range fired {
+		known[f.String()] = true
+	}
+	for {
+		store, more, err := eval(append(slices.Clone(got), fired...))
+		if err != nil {
+			return nil, err
+		}
+		grew := false
+		for _, f := range more {
+			if !known[f.String()] {
+				known[f.String()] = true
+				fired = append(fired, f)
+				grew = true
+			}
+		}
+		if !grew {
+			return store, nil
+		}
+	}
 }
 
 func run(path, entry string) (int, error) {
@@ -214,18 +420,18 @@ func exitCode(store factstore.FactStore) (int, error) {
 	return int(code), nil
 }
 
-func (m *machine) execute(program string) (factstore.FactStore, error) {
-	unit, err := parseFile(program)
+func (m *machine) execute(path string) (factstore.FactStore, error) {
+	universe, err := parseFile(path)
 	if err != nil {
 		return nil, err
 	}
-	names := []string{program}
-	units := []parse.SourceUnit{unit}
-	eval, err := compile(names, units)
+	universe.path = m.program
+	programs := []program{universe}
+	eval, err := compile(programs)
 	if err != nil {
 		return nil, err
 	}
-	store, err := eval(m.given())
+	store, _, err := eval(m.given())
 	if err != nil {
 		return nil, err
 	}
@@ -236,22 +442,19 @@ func (m *machine) execute(program string) (factstore.FactStore, error) {
 	}
 	sort.Strings(wanted)
 	for _, name := range wanted {
-		unit, err := parseFile(m.at(name))
+		p, err := parseFile(m.at(name))
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
-		names = append(names, m.at(name))
-		units = append(units, unit)
+		p.path = m.rel(name)
+		programs = append(programs, p)
 		m.programs = append(m.programs, name)
 	}
 	if len(m.programs) > 0 {
-		if eval, err = compile(names, units); err != nil {
-			return nil, err
-		}
-		if store, err = eval(m.given()); err != nil {
+		if eval, err = compile(programs); err != nil {
 			return nil, err
 		}
 	}
@@ -261,6 +464,9 @@ func (m *machine) execute(program string) (factstore.FactStore, error) {
 	for round := 0; ; round++ {
 		if round == maxRounds {
 			return nil, fmt.Errorf("still asking for new effects after %d rounds", maxRounds)
+		}
+		if store, err = settle(eval, got); err != nil {
+			return nil, err
 		}
 		var todo []ast.Constant
 		for _, d := range facts(store, doesSym) {
@@ -281,9 +487,6 @@ func (m *machine) execute(program string) (factstore.FactStore, error) {
 			for _, r := range out {
 				got = append(got, ast.NewAtom(gotSym.Symbol, doing, ast.String(r.field), r.value))
 			}
-		}
-		if store, err = eval(got); err != nil {
-			return nil, err
 		}
 	}
 	return store, nil
@@ -425,7 +628,7 @@ func readAProgram(m *machine, in map[string][]ast.Constant) ([]result, error) {
 	if err != nil {
 		return nil, err
 	}
-	unit, err := parseFile(m.at(path))
+	prog, err := parseFile(m.at(path))
 	if err != nil {
 		return nil, err
 	}
@@ -435,11 +638,15 @@ func readAProgram(m *machine, in map[string][]ast.Constant) ([]result, error) {
 	}
 	var out []result
 	seen := map[string]bool{}
-	for _, c := range unit.Clauses {
+	for i, c := range prog.unit.Clauses {
 		name := c.Head.Predicate.Symbol
 		if !seen["defines\x00"+name] {
 			seen["defines\x00"+name] = true
 			out = append(out, result{"defines", ast.String(name)})
+		}
+		if line := prog.lines[i]; !seen["clause\x00"+line] {
+			seen["clause\x00"+line] = true
+			out = append(out, result{"clause", ast.String(line)})
 		}
 		if !lawsIn[name] || len(c.Head.Args) == 0 {
 			continue

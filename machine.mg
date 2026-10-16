@@ -35,6 +35,7 @@ met_by("the cases", "know the machine") :- got("know the machine", "started_by",
 met_by("the outcomes", Doing) :- running_a_case(Doing, _).
 met_by("the outcomes", "know the machine") :- got("know the machine", "started_by", "run_a_case").
 met_by("the laws", Doing) :- reading_a_program(Doing, _).
+met_by("the clauses", Doing) :- reading_a_program(Doing, _).
 met_by("the answer", "know the machine").
 
 serves("universe.mg", "every_line_is_accounted_for").
@@ -55,6 +56,7 @@ serves("the cases", "every_case_comes_out_as_stated").
 serves("the cases", "every_law_is_shown_failing").
 serves("the outcomes", "every_case_comes_out_as_stated").
 serves("the laws", "every_law_is_shown_failing").
+serves("the clauses", "unfired").
 serves("the answer", "violation").
 serves("the answer", "the_machine_is_the_one_asked_for").
 
@@ -86,8 +88,12 @@ about('supplied_by("about", "machine.mg").', "the suppliers").
 about('supplied_by("met_by", "machine.mg").', "the suppliers").
 about('supplied_by("serves", "machine.mg").', "the suppliers").
 about('supplied_by("started_by", "the machine").', "the suppliers").
+about('supplied_by("fired", "the machine").', "the suppliers").
 about('output("tells", "mangle").', "this folder").
 about('output("violation", "mangle").', "the answer").
+about('output("case_broke", "mangle").', "the outcomes").
+about('output("case_answered", "mangle").', "the outcomes").
+about('output("unfired", "mangle").', "the clauses").
 about('exit_code("true", 0).', "the answer").
 about('exit_code("false", 1).', "the answer").
 about('exit_code("broken", 2).', "the answer").
@@ -96,6 +102,7 @@ about('Decl about(Text, Requirement).', "the declarations").
 about('Decl met_by(Requirement, Doing).', "the declarations").
 about('Decl serves(Requirement, Purpose).', "the declarations").
 about('Decl started_by(Effect).', "the declarations").
+about('Decl fired(Path, Line).', "the declarations").
 about('does("list the universe").', "this folder").
 about('effect("list the universe", "list_a_folder").', "this folder").
 about('gives("list the universe", "folder", ".").', "this folder").
@@ -115,6 +122,8 @@ about('effect(Doing, "read_a_program") :- reading_a_program(Doing, _).', "the pr
 about('gives(Doing, "path", Path) :- reading_a_program(Doing, Path).', "the programs").
 about('defines(Path, Predicate) :- reading_a_program(Doing, Path), got(Doing, "defines", Predicate).', "the suppliers").
 about('law(Law) :- reading_a_program(Doing, _), got(Doing, "law", Law).', "the purposes").
+about('clause_line(Path, Line) :- reading_a_program(Doing, Path), got(Doing, "clause", Line).', "the clauses").
+about('unfired(Path, Line) :- clause_line(Path, Line), !fired(Path, Line).', "the clauses").
 about('violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !known(Path).', "the languages").
 about('violation("the_only_knowledge_is_datalog", Path) :- finding_comments(Doing, Path), got(Doing, "comment", _).', "the languages").
 about('violation("each_word_has_one_supplier", Path) :- defines(Path, Predicate), supplied_by(Predicate, Supplier), Supplier != Path.', "the suppliers").
@@ -151,13 +160,16 @@ about('running_a_case(Doing, Case) :- case(Case), !in_a_case(), Doing = fn:strin
 about('does(Doing) :- running_a_case(Doing, _).', "the cases").
 about('effect(Doing, "run_a_case") :- running_a_case(Doing, _).', "the cases").
 about('gives(Doing, Path, Line) :- running_a_case(Doing, Case), case_adds_line(Case, Path, Line).', "the cases").
-about('broke_in(Case, Law) :- running_a_case(Doing, Case), got(Doing, "violation", Law).', "the outcomes").
-about('answered(Case, Answer) :- running_a_case(Doing, Case), got(Doing, "exit", Code), exit_code(Answer, Code).', "the outcomes").
-about('missed(Case) :- case_expects(Case, Law), !broke_in(Case, Law).', "the outcomes").
-about('came_out_as_stated(Case) :- case_answer(Case, Answer), answered(Case, Answer), !missed(Case).', "the outcomes").
-about('shown_failing(Law) :- case_expects(_, Law).', "the laws").
+about('case_broke(Case, Law) :- running_a_case(Doing, Case), got(Doing, "violation", Law).', "the outcomes").
+about('case_answered(Case, Answer) :- running_a_case(Doing, Case), got(Doing, "exit", Code), exit_code(Answer, Code).', "the outcomes").
+about('missed(Case) :- case_expects(Case, Law), !case_broke(Case, Law).', "the outcomes").
+about('came_out_as_stated(Case) :- case_answer(Case, Answer), case_answered(Case, Answer), !missed(Case).', "the outcomes").
+about('off_from_stated(Case) :- case(Case), !in_a_case(), !came_out_as_stated(Case).', "the outcomes").
+about('shown_failing(Law) :- case_broke(_, Law).', "the laws").
+about('shown_failing(Law) :- in_a_case(), case_expects(_, Law).', "the laws").
+about('shown_failing("every_case_comes_out_as_stated") :- off_from_stated(Case), case_differs(Case).', "the laws").
 about('violation("every_law_is_shown_failing", Law) :- law(Law), !shown_failing(Law).', "the laws").
-about('violation("every_case_comes_out_as_stated", Case) :- case(Case), !in_a_case(), !came_out_as_stated(Case), !case_differs(Case).', "the outcomes").
+about('violation("every_case_comes_out_as_stated", Case) :- off_from_stated(Case), !case_differs(Case).', "the outcomes").
 about('violation("every_case_comes_out_as_stated", Case) :- case_differs(Case), came_out_as_stated(Case).', "the outcomes").
 about('case_adds_line("a file that is not datalog", "notes.txt", "a note").', "the cases").
 about('case_expects("a file that is not datalog", "the_only_knowledge_is_datalog").', "the cases").
@@ -188,3 +200,14 @@ about('case_answer("a requirement that serves itself", "false").', "the cases").
 about('case_adds_line("a requirement met by every step", "machine.mg", \'met_by("a requirement met by every step", Doing) :- does(Doing).\').', "the cases").
 about('case_expects("a requirement met by every step", "every_requirement_is_specific").', "the cases").
 about('case_answer("a requirement met by every step", "false").', "the cases").
+about('case_adds_line("a comment", "machine.mg", "# a note").', "the cases").
+about('case_expects("a comment", "the_only_knowledge_is_datalog").', "the cases").
+about('case_answer("a comment", "false").', "the cases").
+about('case_adds_line("a step with no requirement", "machine.mg", \'does("an idle step").\').', "the cases").
+about('case_adds_line("a step with no requirement", "machine.mg", \'effect("an idle step", "list_a_folder").\').', "the cases").
+about('case_adds_line("a step with no requirement", "machine.mg", \'gives("an idle step", "folder", ".").\').', "the cases").
+about('case_expects("a step with no requirement", "every_requirement_serves_a_purpose").', "the cases").
+about('case_answer("a step with no requirement", "false").', "the cases").
+about('case_adds_line("a machine program that is missing", "universe.mg", \'machine_program("missing.mg").\').', "the cases").
+about('case_expects("a machine program that is missing", "every_line_is_accounted_for").', "the cases").
+about('case_answer("a machine program that is missing", "false").', "the cases").
