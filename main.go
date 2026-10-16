@@ -34,6 +34,7 @@ var (
 	machineSym    = ast.PredicateSym{Symbol: "machine_program", Arity: 1}
 	tellsName     = "tells"
 	violationName = "violation"
+	brokeField    = "broke"
 	stepNames     = map[string]bool{"does": true, "effect": true, "gives": true, "got": true}
 	outcomeNames  = map[string]bool{"does": true, "effect": true, "gives": true, "got": true, "tells": true, "violation": true}
 )
@@ -54,6 +55,8 @@ type shared struct {
 	measured bool
 	baseline map[string]meaning
 	err      error
+	known    map[string][]result
+	found    map[string][]result
 }
 
 func (m *machine) at(path string) string {
@@ -94,7 +97,7 @@ func init() {
 		"find_comments":    {findComments, []string{"syntax", "comment"}},
 		"read_lines":       {readLines, []string{"line"}},
 		"know_the_machine": {knowTheMachine, []string{"mangle_module", "mangle_version", "entry_point", "machine_program"}},
-		"take_out_a_line":  {takeOutALine, []string{"changed"}},
+		"take_out_a_line":  {takeOutALine, []string{"changed", brokeField}},
 	}
 }
 
@@ -131,7 +134,7 @@ func (m *machine) parseFile(path string) (parse.SourceUnit, error) {
 
 func compile(names []string, units []parse.SourceUnit) (evaluator, error) {
 	what := strings.Join(names, " with ")
-	info, err := analysis.Analyze(units, nil)
+	info, err := analysis.Analyze(units, undefined(units))
 	if err != nil {
 		return nil, fmt.Errorf("analyzing %s: %w", what, err)
 	}
@@ -153,6 +156,38 @@ func compile(names []string, units []parse.SourceUnit) (evaluator, error) {
 	}, nil
 }
 
+func undefined(units []parse.SourceUnit) map[ast.PredicateSym]ast.Decl {
+	defined := map[string]bool{}
+	for _, u := range units {
+		for _, d := range u.Decls {
+			defined[d.DeclaredAtom.Predicate.Symbol] = true
+		}
+		for _, c := range u.Clauses {
+			defined[c.Head.Predicate.Symbol] = true
+		}
+	}
+	extra := map[ast.PredicateSym]ast.Decl{}
+	for _, u := range units {
+		for _, c := range u.Clauses {
+			for _, p := range c.Premises {
+				var sym ast.PredicateSym
+				switch p := p.(type) {
+				case ast.Atom:
+					sym = p.Predicate
+				case ast.NegAtom:
+					sym = p.Atom.Predicate
+				default:
+					continue
+				}
+				if !sym.IsBuiltin() && !defined[sym.Symbol] {
+					extra[sym] = ast.NewSyntheticDeclFromSym(sym)
+				}
+			}
+		}
+	}
+	return extra
+}
+
 type outcome struct {
 	store factstore.FactStore
 	eval  evaluator
@@ -160,10 +195,21 @@ type outcome struct {
 }
 
 func run(path, entry string) error {
-	m := &machine{dir: filepath.Dir(path), entry: entry, program: filepath.Clean(path), shared: &shared{}}
-	o, err := execute(m)
-	if err != nil {
-		return err
+	var known map[string][]result
+	var o *outcome
+	for pass := 0; ; pass++ {
+		if pass == maxRounds {
+			return fmt.Errorf("taking out lines still finds something new after %d passes", maxRounds)
+		}
+		m := &machine{dir: filepath.Dir(path), entry: entry, program: filepath.Clean(path), shared: &shared{known: known, found: map[string][]result{}}}
+		var err error
+		if o, err = execute(m); err != nil {
+			return err
+		}
+		if sameResults(known, m.shared.found) {
+			break
+		}
+		known = m.shared.found
 	}
 	if violations := lines(o.store, violationName); len(violations) > 0 {
 		for _, v := range violations {
@@ -243,8 +289,11 @@ func execute(m *machine) (*outcome, error) {
 		for _, doing := range todo {
 			done[doing.String()] = true
 			out, err := perform(store, m, doing)
-			if err != nil {
+			if err != nil && !m.nested {
 				return nil, fmt.Errorf("does(%v): %w", doing, err)
+			}
+			if err != nil {
+				out = []result{{brokeField, ast.String(err.Error())}}
 			}
 			for _, r := range out {
 				got = append(got, ast.NewAtom(gotSym.Symbol, doing, ast.String(r.field), r.value))
@@ -459,8 +508,9 @@ func takeOutALine(m *machine, in map[string][]ast.Constant) ([]result, error) {
 	if err != nil {
 		return nil, err
 	}
+	key := path + "\n" + line
 	if m.nested {
-		return nil, nil
+		return m.shared.known[key], nil
 	}
 	at := m.at(path)
 	src, err := m.source(at)
@@ -475,15 +525,33 @@ func takeOutALine(m *machine, in map[string][]ast.Constant) ([]result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("take_out_a_line: %s with every line in it: %w", path, err)
 	}
-	var after map[string]meaning
-	if o, err := execute(m.aside(map[string][]byte{at: rest})); err == nil {
-		after = meanings(o)
-	}
 	var out []result
-	for _, doing := range changed(before, after) {
-		out = append(out, result{"changed", doing})
+	if o, err := execute(m.aside(map[string][]byte{at: rest})); err != nil {
+		out = []result{{brokeField, ast.String(err.Error())}}
+	} else {
+		for _, doing := range changed(before, meanings(o)) {
+			out = append(out, result{"changed", doing})
+		}
 	}
+	m.shared.found[key] = out
 	return out, nil
+}
+
+func sameResults(a, b map[string][]result) bool {
+	for _, pair := range [][2]map[string][]result{{a, b}, {b, a}} {
+		for key, as := range pair[0] {
+			bs := pair[1][key]
+			if len(as) != len(bs) {
+				return false
+			}
+			for i := range as {
+				if as[i].field != bs[i].field || !as[i].value.Equals(bs[i].value) {
+					return false
+				}
+			}
+		}
+	}
+	return true
 }
 
 func takeOut(src []byte, line string) ([]byte, bool) {

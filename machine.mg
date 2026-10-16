@@ -25,10 +25,6 @@ about('machine_program("machine.mg").', "the machine").
 about('code_ending(".go").', "the listing").
 about('module_ending("go.mod").', "the listing").
 about('module_ending("go.sum").', "the listing").
-about('Decl got(Doing, Field, Value).', "every doing").
-about('Decl about(Text, Requirement).', "the reading").
-about('Decl met_by(Requirement, Doing).', "every doing").
-about('Decl taken_out(Doing, Text).', "the taking out").
 about('does("list the universe").', "the listing").
 about('effect("list the universe", "list_a_folder").', "the listing").
 about('gives("list the universe", "folder", ".").', "the listing").
@@ -54,7 +50,8 @@ about('universe_line(Text) :- got("read the universe", "line", Text), Text != ""
 about('observed(Doing) :- got(Doing, _, _).', "every doing").
 about('met(Requirement) :- met_by(Requirement, Doing), observed(Doing).', "every doing").
 about('accounted_for(Text) :- about(Text, Requirement), met(Requirement).', "the reading").
-about('changes_its_step(Text) :- taken_out(Taking, Text), about(Text, Requirement), met_by(Requirement, Doing), got(Taking, "changed", Doing).', "the taking out").
+about('broke(Taking) :- got(Taking, "broke", _).', "the taking out").
+about('changes_its_step(Text) :- taken_out(Taking, Text), !broke(Taking), about(Text, Requirement), met_by(Requirement, Doing), got(Taking, "changed", Doing).', "the taking out").
 about('violation("every_line_is_accounted_for", Path) :- machine_program(Path), !universe_file(Path).', "the listing").
 about('violation("every_line_is_accounted_for", Text) :- universe_line(Text), !accounted_for(Text).', "the reading").
 about('violation("every_line_is_real", Text) :- universe_line(Text), !changes_its_step(Text).', "the reading").
