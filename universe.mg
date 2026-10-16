@@ -89,6 +89,12 @@ violation("every_line_is_accounted_for", Text) :- universe_line(Text), !accounte
 violation("every_requirement_serves_a_purpose", Requirement) :- about(_, Requirement), !serves_a_purpose(Requirement).
 violation("every_requirement_serves_a_purpose", Doing) :- does(Doing), !has_a_requirement(Doing).
 
+requirement(Requirement) :- met_by(Requirement, _).
+misses_a_step(Requirement) :- requirement(Requirement), does(Doing), !met_by(Requirement, Doing).
+
+violation("every_requirement_is_specific", Requirement) :- serves(Requirement, Requirement).
+violation("every_requirement_is_specific", Requirement) :- requirement(Requirement), !misses_a_step(Requirement).
+
 a_law_is_broken() :- violation(_, _).
 answer("false") :- a_law_is_broken().
 answer("true") :- !a_law_is_broken().
@@ -146,3 +152,11 @@ case_answer("a world that cannot load", "broken").
 case_expects("a case that differs", "every_case_comes_out_as_stated").
 case_answer("a case that differs", "false").
 case_differs("a case that differs").
+
+case_adds_line("a requirement that serves itself", "machine.mg", 'serves("a self-serving requirement", "a self-serving requirement").').
+case_expects("a requirement that serves itself", "every_requirement_is_specific").
+case_answer("a requirement that serves itself", "false").
+
+case_adds_line("a requirement met by every step", "machine.mg", 'met_by("a requirement met by every step", Doing) :- does(Doing).').
+case_expects("a requirement met by every step", "every_requirement_is_specific").
+case_answer("a requirement met by every step", "false").
