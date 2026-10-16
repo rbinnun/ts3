@@ -28,6 +28,7 @@ supplied_by("got", "the machine").
 supplied_by("about", "machine.mg").
 supplied_by("met_by", "machine.mg").
 supplied_by("serves", "machine.mg").
+supplied_by("started_by", "the machine").
 
 output("tells", "mangle").
 output("violation", "mangle").
@@ -40,6 +41,7 @@ Decl got(Doing, Field, Value).
 Decl about(Text, Requirement).
 Decl met_by(Requirement, Doing).
 Decl serves(Requirement, Purpose).
+Decl started_by(Effect).
 
 does("list the universe").
 effect("list the universe", "list_a_folder").
@@ -90,3 +92,57 @@ violation("every_requirement_serves_a_purpose", Doing) :- does(Doing), !has_a_re
 a_law_is_broken() :- violation(_, _).
 answer("false") :- a_law_is_broken().
 answer("true") :- !a_law_is_broken().
+
+belongs_to("universe.mg", "universe.mg").
+belongs_to(Path, "machine.mg") :- machine_program(Path).
+belongs_to(Path, "the machinery") :- language(Path, Language), !readable(Language).
+in_a_leg(Path) :- belongs_to(Path, Leg), leg(Leg).
+
+violation("every_file_belongs_to_a_leg", Path) :- universe_file(Path), !in_a_leg(Path).
+
+in_a_case() :- started_by("run_a_case").
+case(Case) :- case_answer(Case, _).
+running_a_case(Doing, Case) :- case(Case), !in_a_case(), Doing = fn:string:concat("run the case ", Case).
+does(Doing) :- running_a_case(Doing, _).
+effect(Doing, "run_a_case") :- running_a_case(Doing, _).
+gives(Doing, Path, Line) :- running_a_case(Doing, Case), case_adds_line(Case, Path, Line).
+broke_in(Case, Law) :- running_a_case(Doing, Case), got(Doing, "violation", Law).
+answered(Case, Answer) :- running_a_case(Doing, Case), got(Doing, "exit", Code), exit_code(Answer, Code).
+missed(Case) :- case_expects(Case, Law), !broke_in(Case, Law).
+came_out_as_stated(Case) :- case_answer(Case, Answer), answered(Case, Answer), !missed(Case).
+shown_failing(Law) :- case_expects(_, Law).
+
+violation("every_law_is_shown_failing", Law) :- law(Law), !shown_failing(Law).
+violation("every_case_comes_out_as_stated", Case) :- case(Case), !in_a_case(), !came_out_as_stated(Case), !case_differs(Case).
+violation("every_case_comes_out_as_stated", Case) :- case_differs(Case), came_out_as_stated(Case).
+
+case_adds_line("a file that is not datalog", "notes.txt", "a note").
+case_expects("a file that is not datalog", "the_only_knowledge_is_datalog").
+case_answer("a file that is not datalog", "false").
+
+case_adds_line("a program that fakes an observation", "machine.mg", 'got("list the universe", "file", "nowhere").').
+case_expects("a program that fakes an observation", "each_word_has_one_supplier").
+case_answer("a program that fakes an observation", "false").
+
+case_adds_line("a line nobody accounts for", "universe.mg", 'lonely("a").').
+case_expects("a line nobody accounts for", "every_line_is_accounted_for").
+case_answer("a line nobody accounts for", "false").
+
+case_adds_line("a requirement with no purpose", "machine.mg", 'about("no such line", "a requirement with no purpose").').
+case_expects("a requirement with no purpose", "every_requirement_serves_a_purpose").
+case_answer("a requirement with no purpose", "false").
+
+case_adds_line("a file outside the legs", "notes.mg", 'note("a").').
+case_expects("a file outside the legs", "every_file_belongs_to_a_leg").
+case_answer("a file outside the legs", "false").
+
+case_adds_line("a law with no case", "machine.mg", 'violation("a_law_with_no_case", Path) :- universe_file(Path), :string:ends_with(Path, ".txt").').
+case_expects("a law with no case", "every_law_is_shown_failing").
+case_answer("a law with no case", "false").
+
+case_adds_line("a world that cannot load", "universe.mg", "tells(").
+case_answer("a world that cannot load", "broken").
+
+case_expects("a case that differs", "every_case_comes_out_as_stated").
+case_answer("a case that differs", "false").
+case_differs("a case that differs").
