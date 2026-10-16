@@ -6,7 +6,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -48,6 +50,7 @@ type step struct {
 type outcome struct {
 	code    int
 	outputs []ast.Atom
+	printed []string
 	fired   []site
 	err     error
 }
@@ -66,8 +69,8 @@ func main() {
 	if o.err != nil {
 		fmt.Fprintln(os.Stderr, o.err)
 	}
-	for _, a := range o.outputs {
-		fmt.Println(a.String() + ".")
+	for _, line := range o.printed {
+		fmt.Println(line)
 	}
 	os.Exit(o.code)
 }
@@ -547,14 +550,84 @@ func finish(p *program, store factstore.FactStore) outcome {
 		return broken(fmt.Errorf("the answer %v has %d exit codes", answer, len(codes)))
 	}
 	var outputs []ast.Atom
-	for _, atom := range factsNamed(store, "output", 2) {
-		name, err1 := stringOf(atom.Args[0])
-		format, err2 := stringOf(atom.Args[1])
-		if err1 != nil || err2 != nil || format != "mangle" {
+	for _, atom := range factsNamed(store, "output", 1) {
+		name, err := stringOf(atom.Args[0])
+		if err != nil {
 			return broken(fmt.Errorf("the machinery cannot give the output %v", atom))
 		}
 		outputs = append(outputs, factsNamed(store, name, -1)...)
 	}
 	sort.Slice(outputs, func(i, j int) bool { return outputs[i].String() < outputs[j].String() })
-	return outcome{code: int(codes[0]), outputs: outputs, fired: firedIn(p, store)}
+	printed, err := printOut(store, outputs)
+	if err != nil {
+		return broken(err)
+	}
+	return outcome{code: int(codes[0]), outputs: outputs, printed: printed, fired: firedIn(p, store)}
+}
+
+var placeholder = regexp.MustCompile(`\{([0-9]+)\}`)
+
+func printOut(store factstore.FactStore, outputs []ast.Atom) ([]string, error) {
+	languages := factsNamed(store, "printed_in", 1)
+	if len(languages) != 1 {
+		return nil, fmt.Errorf("the world prints in %d languages", len(languages))
+	}
+	language, err := stringOf(languages[0].Args[0])
+	if err != nil {
+		return nil, fmt.Errorf("the language the world prints in is not named by a string: %v", languages[0])
+	}
+	var printed []string
+	switch language {
+	case "mangle":
+		for _, atom := range outputs {
+			printed = append(printed, atom.String()+".")
+		}
+	case "english":
+		readings := map[string][]ast.Constant{}
+		for _, atom := range factsNamed(store, "reads_as", 2) {
+			word, err := stringOf(atom.Args[0])
+			if err != nil {
+				return nil, fmt.Errorf("a reading is not of a word named by a string: %v", atom)
+			}
+			readings[word] = append(readings[word], constantOf(atom.Args[1]))
+		}
+		for _, atom := range outputs {
+			line, err := inEnglish(atom, readings[atom.Predicate.Symbol])
+			if err != nil {
+				return nil, err
+			}
+			printed = append(printed, line)
+		}
+	default:
+		return nil, fmt.Errorf("the machinery cannot print in %q", language)
+	}
+	return printed, nil
+}
+
+func inEnglish(atom ast.Atom, readings []ast.Constant) (string, error) {
+	word := atom.Predicate.Symbol
+	if len(readings) != 1 {
+		return "", fmt.Errorf("the word %s has %d readings, so %v cannot be printed in english", word, len(readings), atom)
+	}
+	reading, err := readings[0].StringValue()
+	if err != nil {
+		return "", fmt.Errorf("the reading of the word %s is not a string: %v", word, readings[0])
+	}
+	var failure error
+	line := placeholder.ReplaceAllStringFunc(reading, func(hole string) string {
+		position, err := strconv.Atoi(placeholder.FindStringSubmatch(hole)[1])
+		if err != nil || position < 1 || position > len(atom.Args) {
+			failure = fmt.Errorf("the reading of the word %s asks for {%d}, but %v has %d arguments", word, position, atom, len(atom.Args))
+			return hole
+		}
+		value := constantOf(atom.Args[position-1])
+		if text, err := value.StringValue(); err == nil {
+			return text
+		}
+		return value.DisplayString()
+	})
+	if failure != nil {
+		return "", failure
+	}
+	return line, nil
 }
