@@ -39,6 +39,7 @@ supplied_by("law_mentions", "workflow.mg").
 supplied_by("rule_for", "workflow.mg").
 supplied_by("rule_for_law", "workflow.mg").
 supplied_by("rule_uses", "workflow.mg").
+supplied_by("rule_in", "workflow.mg").
 
 Decl got(Doing, Field, Value).
 Decl started_by(Effect).
@@ -56,6 +57,7 @@ Decl law_mentions(Law, Word).
 Decl rule_for(Rule, Word).
 Decl rule_for_law(Rule, Law).
 Decl rule_uses(Rule, Word).
+Decl rule_in(File, Rule).
 
 has_a_role(Path) :- spec(Path).
 has_a_role(Path) :- workflow(Path).
@@ -157,6 +159,7 @@ output("shows").
 output("shows_change").
 output("opens_into").
 output("explained_by").
+output("rule_in").
 printed_in("mangle").
 
 concept("The folder conforms to the spec").
