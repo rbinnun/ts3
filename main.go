@@ -29,16 +29,17 @@ import (
 const mangleModule = "codeberg.org/TauCeti/mangle-go"
 
 var (
-	doesSym     = ast.PredicateSym{Symbol: "does", Arity: 1}
-	effectSym   = ast.PredicateSym{Symbol: "effect", Arity: 2}
-	givesSym    = ast.PredicateSym{Symbol: "gives", Arity: 3}
-	gotSym      = ast.PredicateSym{Symbol: "got", Arity: 3}
-	machineSym  = ast.PredicateSym{Symbol: "machine_program", Arity: 1}
-	outputSym   = ast.PredicateSym{Symbol: "output", Arity: 2}
-	answerSym   = ast.PredicateSym{Symbol: "answer", Arity: 1}
-	exitCodeSym = ast.PredicateSym{Symbol: "exit_code", Arity: 2}
-	startedSym  = ast.PredicateSym{Symbol: "started_by", Arity: 1}
-	firedSym    = ast.PredicateSym{Symbol: "fired", Arity: 2}
+	doesSym        = ast.PredicateSym{Symbol: "does", Arity: 1}
+	effectSym      = ast.PredicateSym{Symbol: "effect", Arity: 2}
+	givesSym       = ast.PredicateSym{Symbol: "gives", Arity: 3}
+	gotSym         = ast.PredicateSym{Symbol: "got", Arity: 3}
+	machineSym     = ast.PredicateSym{Symbol: "machine_program", Arity: 1}
+	outputSym      = ast.PredicateSym{Symbol: "output", Arity: 2}
+	answerSym      = ast.PredicateSym{Symbol: "answer", Arity: 1}
+	exitCodeSym    = ast.PredicateSym{Symbol: "exit_code", Arity: 2}
+	startedSym     = ast.PredicateSym{Symbol: "started_by", Arity: 1}
+	firedSym       = ast.PredicateSym{Symbol: "fired", Arity: 2}
+	firedInCaseSym = ast.PredicateSym{Symbol: "fired_in_a_case", Arity: 2}
 )
 
 const (
@@ -48,16 +49,18 @@ const (
 )
 
 type machine struct {
-	dir       string
-	program   string
-	entry     string
-	startedBy []string
-	programs  []string
+	dir          string
+	program      string
+	entry        string
+	startedBy    []string
+	programs     []string
+	firedInCases []ast.Atom
 }
 
 type outcome struct {
-	code int
-	told []ast.Atom
+	code  int
+	told  []ast.Atom
+	fired []ast.Atom
 }
 
 func (m *machine) at(path string) string {
@@ -325,10 +328,10 @@ func compile(programs []program) (evaluator, error) {
 	}, nil
 }
 
-func settle(eval evaluator, got []ast.Atom) (factstore.FactStore, error) {
+func settle(eval evaluator, got []ast.Atom) (factstore.FactStore, []ast.Atom, error) {
 	_, fired, err := eval(got)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	known := map[string]bool{}
 	for _, f := range fired {
@@ -337,7 +340,7 @@ func settle(eval evaluator, got []ast.Atom) (factstore.FactStore, error) {
 	for {
 		store, more, err := eval(append(slices.Clone(got), fired...))
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		grew := false
 		for _, f := range more {
@@ -348,7 +351,7 @@ func settle(eval evaluator, got []ast.Atom) (factstore.FactStore, error) {
 			}
 		}
 		if !grew {
-			return store, nil
+			return store, fired, nil
 		}
 	}
 }
@@ -373,7 +376,7 @@ func run(path, entry string) (int, error) {
 func (m *machine) outcome(path string) (outcome, error) {
 	program := filepath.Clean(path)
 	m.dir, m.program = filepath.Dir(program), filepath.Base(program)
-	store, err := m.execute(program)
+	store, fired, err := m.execute(program)
 	if err != nil {
 		return outcome{}, err
 	}
@@ -388,7 +391,7 @@ func (m *machine) outcome(path string) (outcome, error) {
 	if err != nil {
 		return outcome{}, err
 	}
-	return outcome{code: code, told: told}, nil
+	return outcome{code: code, told: told, fired: fired}, nil
 }
 
 func (m *machine) given() []ast.Atom {
@@ -420,20 +423,20 @@ func exitCode(store factstore.FactStore) (int, error) {
 	return int(code), nil
 }
 
-func (m *machine) execute(path string) (factstore.FactStore, error) {
+func (m *machine) execute(path string) (factstore.FactStore, []ast.Atom, error) {
 	universe, err := parseFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	universe.path = m.program
 	programs := []program{universe}
 	eval, err := compile(programs)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	store, _, err := eval(m.given())
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var wanted []string
@@ -447,7 +450,7 @@ func (m *machine) execute(path string) (factstore.FactStore, error) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		p.path = m.rel(name)
 		programs = append(programs, p)
@@ -455,18 +458,19 @@ func (m *machine) execute(path string) (factstore.FactStore, error) {
 	}
 	if len(m.programs) > 0 {
 		if eval, err = compile(programs); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	got := m.given()
 	done := map[string]bool{}
+	var fired []ast.Atom
 	for round := 0; ; round++ {
 		if round == maxRounds {
-			return nil, fmt.Errorf("still asking for new effects after %d rounds", maxRounds)
+			return nil, nil, fmt.Errorf("still asking for new effects after %d rounds", maxRounds)
 		}
-		if store, err = settle(eval, got); err != nil {
-			return nil, err
+		if store, fired, err = settle(eval, got); err != nil {
+			return nil, nil, err
 		}
 		var todo []ast.Constant
 		for _, d := range facts(store, doesSym) {
@@ -482,14 +486,16 @@ func (m *machine) execute(path string) (factstore.FactStore, error) {
 			done[doing.String()] = true
 			out, err := perform(store, m, doing)
 			if err != nil {
-				return nil, fmt.Errorf("does(%v): %w", doing, err)
+				return nil, nil, fmt.Errorf("does(%v): %w", doing, err)
 			}
 			for _, r := range out {
 				got = append(got, ast.NewAtom(gotSym.Symbol, doing, ast.String(r.field), r.value))
 			}
 		}
+		got = append(got, m.firedInCases...)
+		m.firedInCases = nil
 	}
-	return store, nil
+	return store, fired, nil
 }
 
 func factsNamed(store factstore.FactStore, name string) []ast.Atom {
@@ -738,6 +744,9 @@ func runACase(m *machine, in map[string][]ast.Constant) ([]result, error) {
 	o, err := inner.outcome(filepath.Join(tmp, m.program))
 	if err != nil {
 		return []result{{"exit", ast.Number(brokenExit)}}, nil
+	}
+	for _, f := range o.fired {
+		m.firedInCases = append(m.firedInCases, ast.NewAtom(firedInCaseSym.Symbol, f.Args...))
 	}
 	out := []result{{"exit", ast.Number(int64(o.code))}}
 	seen := map[string]bool{}

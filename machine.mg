@@ -89,7 +89,9 @@ about('supplied_by("met_by", "machine.mg").', "the suppliers").
 about('supplied_by("serves", "machine.mg").', "the suppliers").
 about('supplied_by("started_by", "the machine").', "the suppliers").
 about('supplied_by("fired", "the machine").', "the suppliers").
+about('supplied_by("fired_in_a_case", "the machine").', "the suppliers").
 about('output("tells", "mangle").', "this folder").
+about('output("answer", "mangle").', "the answer").
 about('output("violation", "mangle").', "the answer").
 about('output("case_broke", "mangle").', "the outcomes").
 about('output("case_answered", "mangle").', "the outcomes").
@@ -103,6 +105,7 @@ about('Decl met_by(Requirement, Doing).', "the declarations").
 about('Decl serves(Requirement, Purpose).', "the declarations").
 about('Decl started_by(Effect).', "the declarations").
 about('Decl fired(Path, Line).', "the declarations").
+about('Decl fired_in_a_case(Path, Line).', "the declarations").
 about('does("list the universe").', "this folder").
 about('effect("list the universe", "list_a_folder").', "this folder").
 about('gives("list the universe", "folder", ".").', "this folder").
@@ -123,7 +126,7 @@ about('gives(Doing, "path", Path) :- reading_a_program(Doing, Path).', "the prog
 about('defines(Path, Predicate) :- reading_a_program(Doing, Path), got(Doing, "defines", Predicate).', "the suppliers").
 about('law(Law) :- reading_a_program(Doing, _), got(Doing, "law", Law).', "the purposes").
 about('clause_line(Path, Line) :- reading_a_program(Doing, Path), got(Doing, "clause", Line).', "the clauses").
-about('unfired(Path, Line) :- clause_line(Path, Line), !fired(Path, Line).', "the clauses").
+about('unfired(Path, Line) :- clause_line(Path, Line), !fired(Path, Line), !fired_in_a_case(Path, Line).', "the clauses").
 about('violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !known(Path).', "the languages").
 about('violation("the_only_knowledge_is_datalog", Path) :- finding_comments(Doing, Path), got(Doing, "comment", _).', "the languages").
 about('violation("each_word_has_one_supplier", Path) :- defines(Path, Predicate), supplied_by(Predicate, Supplier), Supplier != Path.', "the suppliers").
@@ -165,12 +168,12 @@ about('case_answered(Case, Answer) :- running_a_case(Doing, Case), got(Doing, "e
 about('missed(Case) :- case_expects(Case, Law), !case_broke(Case, Law).', "the outcomes").
 about('came_out_as_stated(Case) :- case_answer(Case, Answer), case_answered(Case, Answer), !missed(Case).', "the outcomes").
 about('off_from_stated(Case) :- case(Case), !in_a_case(), !came_out_as_stated(Case).', "the outcomes").
+about('expects_no_law(Case) :- case_expects(Case, Law), !law(Law).', "the outcomes").
 about('shown_failing(Law) :- case_broke(_, Law).', "the laws").
 about('shown_failing(Law) :- in_a_case(), case_expects(_, Law).', "the laws").
-about('shown_failing("every_case_comes_out_as_stated") :- off_from_stated(Case), case_differs(Case).', "the laws").
 about('violation("every_law_is_shown_failing", Law) :- law(Law), !shown_failing(Law).', "the laws").
-about('violation("every_case_comes_out_as_stated", Case) :- off_from_stated(Case), !case_differs(Case).', "the outcomes").
-about('violation("every_case_comes_out_as_stated", Case) :- case_differs(Case), came_out_as_stated(Case).', "the outcomes").
+about('violation("every_case_comes_out_as_stated", Case) :- off_from_stated(Case).', "the outcomes").
+about('violation("every_case_comes_out_as_stated", Case) :- expects_no_law(Case).', "the outcomes").
 about('case_adds_line("a file that is not datalog", "notes.txt", "a note").', "the cases").
 about('case_expects("a file that is not datalog", "the_only_knowledge_is_datalog").', "the cases").
 about('case_answer("a file that is not datalog", "false").', "the cases").
@@ -191,9 +194,9 @@ about('case_expects("a law with no case", "every_law_is_shown_failing").', "the 
 about('case_answer("a law with no case", "false").', "the cases").
 about('case_adds_line("a world that cannot load", "universe.mg", "tells(").', "the cases").
 about('case_answer("a world that cannot load", "broken").', "the cases").
-about('case_expects("a case that differs", "every_case_comes_out_as_stated").', "the cases").
-about('case_answer("a case that differs", "false").', "the cases").
-about('case_differs("a case that differs").', "the cases").
+about('case_adds_line("a case that expects a law nobody laid down", "machine.mg", \'case_expects("a ghost case", "a_law_nobody_laid_down").\').', "the cases").
+about('case_expects("a case that expects a law nobody laid down", "every_case_comes_out_as_stated").', "the cases").
+about('case_answer("a case that expects a law nobody laid down", "false").', "the cases").
 about('case_adds_line("a requirement that serves itself", "machine.mg", \'serves("a self-serving requirement", "a self-serving requirement").\').', "the cases").
 about('case_expects("a requirement that serves itself", "every_requirement_is_specific").', "the cases").
 about('case_answer("a requirement that serves itself", "false").', "the cases").
