@@ -29,7 +29,7 @@ belongs_to(Path, "machine.mg") :- machine_program(Path).
 belongs_to(Path, "the machinery") :- language(Path, Language), !readable(Language).
 in_a_leg(Path) :- belongs_to(Path, Leg), leg(Leg).
 
-violation("every_file_belongs_to_a_leg", Path) :- own_file(Path), !in_a_leg(Path).
+violation("every_file_belongs_to_a_leg", Path) :- universe_file(Path), !in_a_leg(Path).
 violation("the_world_sees_itself", "universe.mg") :- !universe_file("universe.mg").
 violation("the_world_sees_itself", Path) :- machine_program(Path), !universe_file(Path).
 
@@ -57,10 +57,6 @@ supplied_by("case_broke", "machine.mg").
 supplied_by("case_answered", "machine.mg").
 supplied_by("unfired", "machine.mg").
 supplied_by("size", "machine.mg").
-supplied_by("folder_of", "machine.mg").
-supplied_by("name_of", "machine.mg").
-supplied_by("inside", "machine.mg").
-supplied_by("world_answered", "machine.mg").
 supplied_by("mentions", "machine.mg").
 supplied_by("law_mentions", "machine.mg").
 
@@ -75,14 +71,10 @@ Decl case_broke(Case, Law).
 Decl case_answered(Case, Answer).
 Decl unfired(Path, Line).
 Decl size(Path, Lines).
-Decl folder_of(Path, Folder).
-Decl name_of(Path, Name).
-Decl inside(Folder, Parent).
-Decl world_answered(World, Answer).
 Decl mentions(Word, Other).
 Decl law_mentions(Law, Word).
 
-violation("each_word_has_one_supplier", Path) :- defines(Path, Predicate), own_file(Path), supplied_by(Predicate, Supplier), Supplier != Path.
+violation("each_word_has_one_supplier", Path) :- defines(Path, Predicate), supplied_by(Predicate, Supplier), Supplier != Path.
 
 case_adds_line("a program that fakes an observation", "machine.mg", 'got("a step", "file", "nowhere").').
 case_expects("a program that fakes an observation", "each_word_has_one_supplier").
@@ -97,7 +89,7 @@ reads_as("known", "{1} is known").
 
 known(Path) :- language(Path, _).
 
-violation("the_only_knowledge_is_datalog", Path) :- own_file(Path), !known(Path).
+violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !known(Path).
 
 case_adds_line("a file that is not datalog", "notes.txt", "a note").
 case_expects("a file that is not datalog", "the_only_knowledge_is_datalog").
@@ -123,7 +115,7 @@ has_comments("mangle").
 has_comments("go").
 has_comments("sh").
 
-violation("the_only_knowledge_is_datalog", Path) :- comment_in(Path, _), own_file(Path).
+violation("the_only_knowledge_is_datalog", Path) :- comment_in(Path, _).
 
 case_adds_line("a comment", "machine.mg", "# a note").
 case_expects("a comment", "the_only_knowledge_is_datalog").
@@ -219,24 +211,3 @@ case_adds_line("a word nobody explained", "universe.mg", 'lonely("a").').
 case_expects("a word nobody explained", "every_word_is_understood").
 case_answer("a word nobody explained", "false").
 
-reads_as("folder_of", "{1} sits in the folder {2}").
-reads_as("name_of", "{1} is named {2}").
-reads_as("inside", "the folder {1} sits inside {2}").
-reads_as("world_answered", "the world in {1} answered {2}").
-reads_as("world", "{1} holds a world").
-reads_as("owned_by", "the folder {1} belongs to the world in {2}").
-reads_as("own_file", "{1} is a file of this world").
-reads_as("inner_world", "{1} holds a world inside this one").
-
-world(".").
-world(Folder) :- folder_of(Path, Folder), name_of(Path, "universe.mg").
-owned_by(Folder, Folder) :- world(Folder).
-owned_by(Folder, World) :- inside(Folder, Parent), !world(Folder), owned_by(Parent, World).
-own_file(Path) :- folder_of(Path, Folder), owned_by(Folder, ".").
-inner_world(World) :- world(World), World != ".".
-
-violation("every_world_inside_is_true", World) :- inner_world(World), !world_answered(World, "true").
-
-case_adds_line("a world inside that is false", "inner/universe.mg", 'violation("always_broken", "here").').
-case_expects("a world inside that is false", "every_world_inside_is_true").
-case_answer("a world inside that is false", "false").
