@@ -27,6 +27,13 @@ clause_at(Path, Number, Line, Predicate) :- parsing(Path, Doing), got(Doing, "cl
 argument_at(Path, Number, Position, Value) :- parsing(Path, Doing), got(Doing, "argument", Argument), Number = fn:list:get(Argument, 0), Position = fn:list:get(Argument, 1), Value = fn:list:get(Argument, 2).
 defines(Path, Predicate) :- clause_at(Path, _, _, Predicate).
 
+use_syntax("mangle", '^(?:[^"\'`]|"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\'|`[^`]*`)*:-(?:(?:[^"\'`]|"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\'|`[^`]*`)*[^A-Za-z0-9_.:"\'`])?', '\\(').
+named(Name) :- program(Path), defines(Path, Name).
+named(Name) :- word(Name).
+uses(Path, Number, Other) :- program(Path), language(Path, Language), use_syntax(Language, Before, After), clause_at(Path, Number, Line, _), line_of(Path, Line, Text), named(Other), Syntax = fn:string:concat(Before, Other, After), :string:matches(Text, Syntax).
+mentions(Word, Other) :- uses(Path, Number, Other), clause_at(Path, Number, _, Word), Word != "violation".
+law_mentions(Law, Other) :- uses(Path, Number, Other), clause_at(Path, Number, _, "violation"), argument_at(Path, Number, 1, Law).
+
 program(Path) :- source_of_truth(Path).
 program(Path) :- machine_program(Path), universe_file(Path).
 law(Law) :- program(Path), clause_at(Path, Number, _, "violation"), argument_at(Path, Number, 1, Law).

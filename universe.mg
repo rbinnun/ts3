@@ -9,7 +9,6 @@ read_by_the_machinery("machine_program").
 read_by_the_machinery("output").
 read_by_the_machinery("printed_in").
 read_by_the_machinery("reads_as").
-read_by_the_machinery("shown_as").
 read_by_the_machinery("answer").
 read_by_the_machinery("exit_code").
 
@@ -17,7 +16,9 @@ reads_as("machine_program", "{1} is a machine program").
 reads_as("leg", "{1} is a leg").
 reads_as("belongs_to", "{1} belongs to the leg {2}").
 reads_as("in_a_leg", "{1} is in a leg").
+reads_as("source_of_truth", "{1} is the source of truth").
 
+source_of_truth("universe.mg").
 machine_program("machine.mg").
 leg("universe.mg").
 leg("machine.mg").
@@ -129,7 +130,6 @@ reads_as("violation", "{2} breaks {1}").
 reads_as("law", "{1} is a law").
 reads_as("unfired", "line {2} of {1} never fired").
 reads_as("size", "{1} has {2} lines").
-reads_as("shown_as", "{1} is shown as a {2}").
 
 printed_in("english").
 output("answer").
@@ -139,7 +139,6 @@ output("case_answered").
 output("unfired").
 output("size").
 output("rests_on").
-shown_as("rests_on", "tree").
 
 exit_code("true", 0).
 exit_code("false", 1).
@@ -200,6 +199,7 @@ word(Word) :- supplied_by(Word, _).
 has_a_reading(Word) :- reads_as(Word, _).
 rests_on(Word, Other) :- mentions(Word, Other).
 rests_on("violation", Law) :- law(Law).
+rests_on("output", Word) :- output(Word).
 rests_on(Law, Word) :- law_mentions(Law, Word).
 reaches_the_outside(Word) :- read_by_the_machinery(Word).
 reaches_the_outside(Other) :- rests_on(Word, Other), reaches_the_outside(Word).
