@@ -7,6 +7,9 @@ leg("universe.mg").
 leg("machine.mg").
 leg("the machinery").
 rebuilt_from(Leg, Other) :- leg(Leg), leg(Other), Leg != Other.
+source_of_truth("universe.mg").
+a_rebuild_replaces(Leg) :- leg(Leg), !source_of_truth(Leg).
+a_rebuild_proposes(Leg) :- source_of_truth(Leg).
 written_by("universe.mg", "the owner").
 written_by("machine.mg", "the builder").
 written_by("the machinery", "the builder").
@@ -77,10 +80,12 @@ accounted_for(Text) :- about(Text, Requirement), met(Requirement).
 purpose(Law) :- law(Law).
 purpose(Predicate) :- output(Predicate, _).
 serves_a_purpose(Requirement) :- serves(Requirement, Purpose), purpose(Purpose).
+has_a_requirement(Doing) :- met_by(_, Doing).
 
 violation("every_line_is_accounted_for", Path) :- machine_program(Path), !universe_file(Path).
 violation("every_line_is_accounted_for", Text) :- universe_line(Text), !accounted_for(Text).
 violation("every_requirement_serves_a_purpose", Requirement) :- about(_, Requirement), !serves_a_purpose(Requirement).
+violation("every_requirement_serves_a_purpose", Doing) :- does(Doing), !has_a_requirement(Doing).
 
 a_law_is_broken() :- violation(_, _).
 answer("false") :- a_law_is_broken().
