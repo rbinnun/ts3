@@ -2,7 +2,7 @@ cd "$(dirname "$0")" || exit 2
 machinery=$(mktemp -d) || exit 2
 if GOFLAGS=-mod=readonly GOWORK=off go build -o "$machinery/machinery" .
 then
-  "$machinery/machinery" universe.mg
+  "$machinery/machinery" spec.mg
   code=$?
 else
   code=2

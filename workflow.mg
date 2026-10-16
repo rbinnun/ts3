@@ -1,15 +1,15 @@
 effect("looking around", "list").
 effect("reading", "read").
 effect("parsing", "parse").
-effect("a case", "start").
+effect("a change", "start").
 effect("tracing", "trace").
 
-within("a case") :- started_by("a case").
+within("a change") :- started_by("a change").
 
 does("the world", "looking around").
-universe_file(Path) :- got("the world", "file", Path).
+in_the_folder(Path) :- got("the world", "file", Path).
 
-reading(Path, Doing) :- universe_file(Path), Doing = ["reading", Path].
+reading(Path, Doing) :- in_the_folder(Path), Doing = ["reading", Path].
 does(Doing, "reading") :- reading(_, Doing).
 gives(Doing, "path", Path) :- reading(Path, Doing).
 line_of(Path, Number, Text) :- reading(Path, Doing), got(Doing, "line", Line), Number = fn:list:get(Line, 0), Text = fn:list:get(Line, 1).
@@ -34,15 +34,15 @@ uses(Path, Number, Other) :- program(Path), language(Path, Language), use_syntax
 mentions(Word, Other) :- uses(Path, Number, Other), clause_at(Path, Number, _, Word), Word != "violation".
 law_mentions(Law, Other) :- uses(Path, Number, Other), clause_at(Path, Number, _, "violation"), argument_at(Path, Number, 1, Law).
 
-program(Path) :- source_of_truth(Path).
-program(Path) :- machine_program(Path), universe_file(Path).
+program(Path) :- spec(Path).
+program(Path) :- workflow(Path), in_the_folder(Path).
 law(Law) :- program(Path), clause_at(Path, Number, _, "violation"), argument_at(Path, Number, 1, Law).
 
-trying(Case, Doing) :- case(Case), !in_a_case(), Doing = ["trying", Case].
-does(Doing, "a case") :- trying(_, Doing).
-gives(Doing, "adds", Addition) :- trying(Case, Doing), case_adds_line(Case, Path, Line), Addition = [Path, Line].
-case_answered(Case, Answer) :- trying(Case, Doing), got(Doing, "exit code", Code), exit_code(Answer, Code).
-case_broke(Case, Law) :- trying(Case, Doing), got(Doing, "output", Fact), :match_cons(Fact, Predicate, Arguments), Predicate = "violation", :match_cons(Arguments, Law, _).
+trying(Change, Doing) :- change(Change), !in_a_change(), Doing = ["trying", Change].
+does(Doing, "a change") :- trying(_, Doing).
+gives(Doing, "adds", Addition) :- trying(Change, Doing), adds_line(Change, Path, Line), Addition = [Path, Line].
+answered(Change, Answer) :- trying(Change, Doing), got(Doing, "exit code", Code), exit_code(Answer, Code).
+broke(Change, Law) :- trying(Change, Doing), got(Doing, "output", Fact), :match_cons(Fact, Predicate, Arguments), Predicate = "violation", :match_cons(Arguments, Law, _).
 
 does("this run", "tracing").
 fired(Path, Number) :- got("this run", "fired", Clause), Path = fn:list:get(Clause, 0), Number = fn:list:get(Clause, 1).
