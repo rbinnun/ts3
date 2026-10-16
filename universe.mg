@@ -29,9 +29,13 @@ supplied_by("about", "machine.mg").
 supplied_by("met_by", "machine.mg").
 supplied_by("serves", "machine.mg").
 supplied_by("started_by", "the machine").
+supplied_by("fired", "the machine").
 
 output("tells", "mangle").
 output("violation", "mangle").
+output("case_broke", "mangle").
+output("case_answered", "mangle").
+output("unfired", "mangle").
 
 exit_code("true", 0).
 exit_code("false", 1).
@@ -42,6 +46,7 @@ Decl about(Text, Requirement).
 Decl met_by(Requirement, Doing).
 Decl serves(Requirement, Purpose).
 Decl started_by(Effect).
+Decl fired(Path, Line).
 
 does("list the universe").
 effect("list the universe", "list_a_folder").
@@ -66,6 +71,8 @@ effect(Doing, "read_a_program") :- reading_a_program(Doing, _).
 gives(Doing, "path", Path) :- reading_a_program(Doing, Path).
 defines(Path, Predicate) :- reading_a_program(Doing, Path), got(Doing, "defines", Predicate).
 law(Law) :- reading_a_program(Doing, _), got(Doing, "law", Law).
+clause_line(Path, Line) :- reading_a_program(Doing, Path), got(Doing, "clause", Line).
+unfired(Path, Line) :- clause_line(Path, Line), !fired(Path, Line).
 
 violation("the_only_knowledge_is_datalog", Path) :- universe_file(Path), !known(Path).
 violation("the_only_knowledge_is_datalog", Path) :- finding_comments(Doing, Path), got(Doing, "comment", _).
@@ -112,14 +119,17 @@ running_a_case(Doing, Case) :- case(Case), !in_a_case(), Doing = fn:string:conca
 does(Doing) :- running_a_case(Doing, _).
 effect(Doing, "run_a_case") :- running_a_case(Doing, _).
 gives(Doing, Path, Line) :- running_a_case(Doing, Case), case_adds_line(Case, Path, Line).
-broke_in(Case, Law) :- running_a_case(Doing, Case), got(Doing, "violation", Law).
-answered(Case, Answer) :- running_a_case(Doing, Case), got(Doing, "exit", Code), exit_code(Answer, Code).
-missed(Case) :- case_expects(Case, Law), !broke_in(Case, Law).
-came_out_as_stated(Case) :- case_answer(Case, Answer), answered(Case, Answer), !missed(Case).
-shown_failing(Law) :- case_expects(_, Law).
+case_broke(Case, Law) :- running_a_case(Doing, Case), got(Doing, "violation", Law).
+case_answered(Case, Answer) :- running_a_case(Doing, Case), got(Doing, "exit", Code), exit_code(Answer, Code).
+missed(Case) :- case_expects(Case, Law), !case_broke(Case, Law).
+came_out_as_stated(Case) :- case_answer(Case, Answer), case_answered(Case, Answer), !missed(Case).
+off_from_stated(Case) :- case(Case), !in_a_case(), !came_out_as_stated(Case).
+shown_failing(Law) :- case_broke(_, Law).
+shown_failing(Law) :- in_a_case(), case_expects(_, Law).
+shown_failing("every_case_comes_out_as_stated") :- off_from_stated(Case), case_differs(Case).
 
 violation("every_law_is_shown_failing", Law) :- law(Law), !shown_failing(Law).
-violation("every_case_comes_out_as_stated", Case) :- case(Case), !in_a_case(), !came_out_as_stated(Case), !case_differs(Case).
+violation("every_case_comes_out_as_stated", Case) :- off_from_stated(Case), !case_differs(Case).
 violation("every_case_comes_out_as_stated", Case) :- case_differs(Case), came_out_as_stated(Case).
 
 case_adds_line("a file that is not datalog", "notes.txt", "a note").
@@ -160,3 +170,17 @@ case_answer("a requirement that serves itself", "false").
 case_adds_line("a requirement met by every step", "machine.mg", 'met_by("a requirement met by every step", Doing) :- does(Doing).').
 case_expects("a requirement met by every step", "every_requirement_is_specific").
 case_answer("a requirement met by every step", "false").
+
+case_adds_line("a comment", "machine.mg", "# a note").
+case_expects("a comment", "the_only_knowledge_is_datalog").
+case_answer("a comment", "false").
+
+case_adds_line("a step with no requirement", "machine.mg", 'does("an idle step").').
+case_adds_line("a step with no requirement", "machine.mg", 'effect("an idle step", "list_a_folder").').
+case_adds_line("a step with no requirement", "machine.mg", 'gives("an idle step", "folder", ".").').
+case_expects("a step with no requirement", "every_requirement_serves_a_purpose").
+case_answer("a step with no requirement", "false").
+
+case_adds_line("a machine program that is missing", "universe.mg", 'machine_program("missing.mg").').
+case_expects("a machine program that is missing", "every_line_is_accounted_for").
+case_answer("a machine program that is missing", "false").
