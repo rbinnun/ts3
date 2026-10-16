@@ -1,11 +1,7 @@
-cd "$(dirname "$0")" || exit 2
-machinery=$(mktemp -d) || exit 2
-if GOFLAGS=-mod=readonly GOWORK=off go build -o "$machinery/machinery" .
-then
-  "$machinery/machinery" spec.mg
-  code=$?
-else
-  code=2
-fi
-rm -rf "$machinery"
-exit "$code"
+cd "$(dirname "$0")" || exit
+machine="$(mktemp -d)" || exit
+go build -o "$machine/engine" . || exit
+"$machine/engine" spec.mg "$@"
+answer=$?
+rm -rf "$machine"
+exit "$answer"

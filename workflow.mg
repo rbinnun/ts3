@@ -1,54 +1,52 @@
-effect("looking around", "list").
-effect("reading", "read").
-effect("parsing", "parse").
-effect("a change", "start").
-effect("tracing", "trace").
+within(Context) :- started_by(Context).
 
-within("a change") :- started_by("a change").
+gives("list", "file").
+gives("count lines", "lines").
+gives("find comments", "comment").
+gives("parse", "rule").
+gives("read a rule", "head").
+gives("read a rule", "first").
+gives("read a rule", "uses").
+gives("see what fired", "fired").
+gives("try", "answer").
+gives("try", "broke").
+gives("try", "unfired").
 
-does("the world", "looking around").
-in_the_folder(Path) :- got("the world", "file", Path).
+does("list the folder", "list", ".").
+listed(Path) :- does(Doing, "list", "."), got(Doing, "file", Path).
+in_the_folder(Path) :- listed(Path).
 
-reading(Path, Doing) :- in_the_folder(Path), Doing = ["reading", Path].
-does(Doing, "reading") :- reading(_, Doing).
-gives(Doing, "path", Path) :- reading(Path, Doing).
-line_of(Path, Number, Text) :- reading(Path, Doing), got(Doing, "line", Line), Number = fn:list:get(Line, 0), Text = fn:list:get(Line, 1).
-size(Path, Lines) :- reading(Path, Doing), got(Doing, "lines", Lines).
+counts(Doing, Path) :- listed(Path), Doing = fn:string:concat("count the lines of ", Path).
+does(Doing, "count lines", Path) :- counts(Doing, Path).
+size(Path, Lines) :- counts(Doing, Path), got(Doing, "lines", Lines).
 
-comment_syntax("mangle", '^(?:[^"\'#`]|"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\'|`[^`]*`)*#').
-comment_syntax("go", '^(?:[^"\'/`]|/[^/*"\'`]|"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\'|`[^`]*`)*/[/*]').
-comment_syntax("sh", '^(?:(?:[^"\'\\\\]|\\\\.|"(?:[^"\\\\]|\\\\.)*"|\'[^\']*\')*[\\s;&|()<>])?#').
-comment_in(Path, Text) :- language(Path, Language), has_comments(Language), comment_syntax(Language, Syntax), line_of(Path, _, Text), :string:matches(Text, Syntax).
-
-parsing(Path, Doing) :- language(Path, "mangle"), Doing = ["parsing", Path].
-does(Doing, "parsing") :- parsing(_, Doing).
-gives(Doing, "path", Path) :- parsing(Path, Doing).
-clause_at(Path, Number, Line, Predicate) :- parsing(Path, Doing), got(Doing, "clause", Clause), Number = fn:list:get(Clause, 0), Line = fn:list:get(Clause, 1), Predicate = fn:list:get(Clause, 2).
-argument_at(Path, Number, Position, Value) :- parsing(Path, Doing), got(Doing, "argument", Argument), Number = fn:list:get(Argument, 0), Position = fn:list:get(Argument, 1), Value = fn:list:get(Argument, 2).
-defines(Path, Predicate) :- clause_at(Path, _, _, Predicate).
-
-use_syntax("mangle", '^(?:[^"\'`]|"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\'|`[^`]*`)*:-(?:(?:[^"\'`]|"(?:[^"\\\\]|\\\\.)*"|\'(?:[^\'\\\\]|\\\\.)*\'|`[^`]*`)*[^A-Za-z0-9_.:"\'`])?', '\\(').
-named(Name) :- program(Path), defines(Path, Name).
-named(Name) :- word(Name).
-uses(Path, Number, Other) :- program(Path), language(Path, Language), use_syntax(Language, Before, After), clause_at(Path, Number, Line, _), line_of(Path, Line, Text), named(Other), Syntax = fn:string:concat(Before, Other, After), :string:matches(Text, Syntax).
-mentions(Word, Other) :- uses(Path, Number, Other), clause_at(Path, Number, _, Word), Word != "violation".
-law_mentions(Law, Other) :- uses(Path, Number, Other), clause_at(Path, Number, _, "violation"), argument_at(Path, Number, 1, Law).
+looks_for_comments(Doing, Path, Language) :- listed(Path), language(Path, Language), has_comments(Language), Doing = fn:string:concat("look for comments in ", Path).
+does(Doing, "find comments", fn:list(Path, Language)) :- looks_for_comments(Doing, Path, Language).
+comment_in(Path, Text) :- looks_for_comments(Doing, Path, _), got(Doing, "comment", Text).
 
 program(Path) :- spec(Path).
-program(Path) :- workflow(Path), in_the_folder(Path).
-law(Law) :- program(Path), clause_at(Path, Number, _, "violation"), argument_at(Path, Number, 1, Law).
+program(Path) :- workflow(Path).
+parses(Doing, Path) :- program(Path), listed(Path), Doing = fn:string:concat("parse ", Path).
+does(Doing, "parse", Path) :- parses(Doing, Path).
+rule_in(Path, Rule) :- parses(Doing, Path), got(Doing, "rule", Rule).
 
-trying(Change, Doing) :- change(Change), !in_a_change(), Doing = ["trying", Change].
-does(Doing, "a change") :- trying(_, Doing).
-gives(Doing, "adds", Addition) :- trying(Change, Doing), adds_line(Change, Path, Line), Addition = [Path, Line].
-answered(Change, Answer) :- trying(Change, Doing), got(Doing, "exit code", Code), exit_code(Answer, Code).
-broke(Change, Law) :- trying(Change, Doing), got(Doing, "output", Fact), :match_cons(Fact, Predicate, Arguments), Predicate = "violation", :match_cons(Arguments, Law, _).
+does(Rule, "read a rule", Rule) :- rule_in(_, Rule).
+rule_for(Rule, Word) :- rule_in(_, Rule), got(Rule, "head", Word).
+rule_uses(Rule, Word) :- rule_in(_, Rule), got(Rule, "uses", Word).
+rule_for_law(Rule, Law) :- rule_for(Rule, "violation"), got(Rule, "first", Law).
+law(Law) :- rule_for_law(_, Law).
+law_mentions(Law, Word) :- rule_for_law(Rule, Law), rule_uses(Rule, Word).
+mentions(Word, Other) :- rule_for(Rule, Word), rule_uses(Rule, Other).
+defines(Path, Word) :- rule_in(Path, Rule), rule_for(Rule, Word).
 
-does("this run", "tracing").
-fired(Path, Number) :- got("this run", "fired", Clause), Path = fn:list:get(Clause, 0), Number = fn:list:get(Clause, 1).
-fired(Path, Number) :- trying(_, Doing), got(Doing, "fired", Clause), Path = fn:list:get(Clause, 0), Number = fn:list:get(Clause, 1).
-unfired(Path, Line) :- clause_at(Path, Number, Line, _), !fired(Path, Number).
+does(Change, "try", fn:list(Path, Line, Entry)) :- adds_line(Change, Path, Line), entry_point(Entry), !within("a change").
+effect(Change, "a change") :- does(Change, "try", _).
+answered(Change, Answer) :- does(Change, "try", _), got(Change, "answer", Answer).
+broke(Change, Law) :- does(Change, "try", _), got(Change, "broke", Law).
 
-rule_for(Rule, Word) :- program(Path), clause_at(Path, _, Line, Word), Rule = [Path, Line].
-rule_for_law(Rule, Law) :- program(Path), clause_at(Path, Number, Line, "violation"), argument_at(Path, Number, 1, Law), Rule = [Path, Line].
-rule_uses(Rule, Word) :- uses(Path, Number, Word), clause_at(Path, Number, Line, _), Rule = [Path, Line].
+sees(Doing, Path) :- parses(_, Path), Doing = fn:string:concat("see what fired in ", Path).
+does(Doing, "see what fired", Path) :- sees(Doing, Path).
+unfired_in(Change, Path, Rule) :- does(Change, "try", _), got(Change, "unfired", Where), :match_pair(Where, Path, Rule).
+fired(Path, Rule) :- sees(Doing, Path), got(Doing, "fired", Rule).
+fired(Path, Rule) :- answered(Change, Answer), Answer != "broken", rule_in(Path, Rule), !unfired_in(Change, Path, Rule).
+unfired(Path, Rule) :- rule_in(Path, Rule), !fired(Path, Rule).

@@ -1,4 +1,4 @@
-module universe
+module machine
 
 go 1.25.0
 
