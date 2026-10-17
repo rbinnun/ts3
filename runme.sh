@@ -1,5 +1,5 @@
 cd "$(dirname "$0")" || exit 2
-dir=$(mktemp -d) || exit 2
-trap 'rm -rf "$dir"' EXIT
-go build -o "$dir/machine" . || exit 2
-"$dir/machine" spec.plain "$@"
+bin="$(mktemp -d)" || exit 2
+trap 'rm -rf "$bin"' EXIT
+go build -o "$bin/engine" . || exit 2
+"$bin/engine"

@@ -1,23 +1,23 @@
 command: list the folder, uses, list, the folder
 
-[file], is, in the folder
-    if [command], uses, list, the folder
-    and [command], returned, file, [file]
-
 [command], uses, [tool], [file]
-    if [file], written in, [language]
-    and [tool], finds comments in, [language]
+    if [tool], finds comments in, [language]
+    and [file], written in, [language]
     and [command], is the join of, "command: find the comments in ", [file]
-
-[file], has the comment, [text]
-    if [command], uses, [tool], [file]
-    and [tool], finds comments in, [any language]
-    and [command], returned, comment, [text]
 
 [command], uses, try, [change]
     if [change], is, a change
     and not this run is a change
     and [command], is the join of, "command: try ", [change]
+
+[file], is, in the folder
+    if [command], uses, list, [any folder]
+    and [command], returned, file, [file]
+
+[file], has the comment, [text]
+    if [command], uses, [tool], [file]
+    and [tool], finds comments in, [any language]
+    and [command], returned, comment, [text]
 
 [change], broke, [law]
     if [command], uses, try, [change]

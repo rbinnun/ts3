@@ -3,141 +3,129 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"go/scanner"
 	"go/token"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	"codeberg.org/TauCeti/mangle-go/ast"
 )
 
-const (
-	tools      = "tools.go"
-	trialKind  = "a change"
-	trialLimit = 10 * time.Minute
-)
+const runLimit = 10 * time.Minute
 
-type call struct {
-	tool  term
-	input term
-}
-
-type result struct {
+type outcome struct {
 	field string
-	value term
+	value ast.Constant
 }
 
-func (r result) fact(command term) literal {
-	return relation("returned", command, str(r.field), r.value)
-}
-
-func runTool(c call, k *knowledge) ([]result, error) {
-	if c.tool.kind != stringTerm || c.input.kind != stringTerm {
-		return nil, nil
-	}
-	switch c.tool.text {
+func useTool(k *knowledge, tool, input string) []outcome {
+	switch tool {
 	case "list":
-		return list(c.input.text)
+		return listFolder(input)
 	case "find go comments":
-		return findGoComments(c.input.text)
+		return findGoComments(input)
 	case "find sh comments":
-		return findShComments(c.input.text)
-	case "try":
-		return try(c.input.text, k)
+		return findShComments(input)
 	}
-	return nil, nil
+	if k.executes(toolsFile, "runs", 2) && len(k.objects("runs", tool)) > 0 {
+		return tryChange(k, tool, input)
+	}
+	return nil
 }
 
-func list(place string) ([]result, error) {
-	folder := place
-	if place == "the folder" {
-		folder = "."
+func folderPath(input string) (string, bool) {
+	if input == "the folder" {
+		return ".", true
 	}
-	entries, err := os.ReadDir(folder)
+	return input, filepath.IsLocal(input)
+}
+
+func listFolder(input string) []outcome {
+	dir, ok := folderPath(input)
+	if !ok {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil
 	}
-	var found []result
+	var out []outcome
 	for _, e := range entries {
-		found = append(found, result{"file", str(e.Name())})
+		out = append(out, outcome{"file", ast.String(e.Name())})
 	}
-	return found, nil
+	return out
 }
 
-func oneLine(text string) string {
-	return strings.Join(strings.Fields(text), " ")
-}
-
-func findGoComments(name string) ([]result, error) {
-	src, err := os.ReadFile(name)
+func findGoComments(input string) []outcome {
+	if !filepath.IsLocal(input) {
+		return nil
+	}
+	src, err := os.ReadFile(input)
 	if err != nil {
-		return nil, err
+		return nil
 	}
+	files := token.NewFileSet()
 	var s scanner.Scanner
-	s.Init(token.NewFileSet().AddFile(name, -1, len(src)), src, nil, scanner.ScanComments)
-	var found []result
+	s.Init(files.AddFile(input, -1, len(src)), src, func(token.Position, string) {}, scanner.ScanComments)
+	var out []outcome
 	for {
 		_, tok, text := s.Scan()
 		if tok == token.EOF {
-			return found, nil
+			return out
 		}
 		if tok == token.COMMENT {
-			found = append(found, result{"comment", str(oneLine(text))})
+			out = append(out, outcome{"comment", ast.String(text)})
 		}
 	}
 }
 
-func findShComments(name string) ([]result, error) {
-	src, err := os.ReadFile(name)
+func findShComments(input string) []outcome {
+	if !filepath.IsLocal(input) {
+		return nil
+	}
+	src, err := os.ReadFile(input)
 	if err != nil {
-		return nil, err
+		return nil
 	}
-	var found []result
-	var quote byte
-	wordStart := true
-	for i := 0; i < len(src); i++ {
-		c := src[i]
-		switch {
-		case quote == '\'':
-			if c == '\'' {
-				quote = 0
+	var out []outcome
+	single, double := false, false
+	for _, line := range strings.Split(string(src), "\n") {
+		escaped := false
+		for i := 0; i < len(line); i++ {
+			ch := line[i]
+			switch {
+			case escaped:
+				escaped = false
+			case ch == '\\' && !single:
+				escaped = true
+			case ch == '\'' && !double:
+				single = !single
+			case ch == '"' && !single:
+				double = !double
+			case ch == '#' && !single && !double && (i == 0 || strings.IndexByte(" \t;&|()", line[i-1]) >= 0):
+				out = append(out, outcome{"comment", ast.String(line[i:])})
+				i = len(line)
 			}
-		case quote == '"':
-			if c == '\\' {
-				i++
-			} else if c == '"' {
-				quote = 0
-			}
-		case c == '\\':
-			i++
-			wordStart = false
-		case c == '\'' || c == '"':
-			quote = c
-			wordStart = false
-		case c == '#' && wordStart:
-			end := bytes.IndexByte(src[i:], '\n')
-			if end < 0 {
-				end = len(src) - i
-			}
-			found = append(found, result{"comment", str(oneLine(string(src[i : i+end])))})
-			i += end - 1
-		default:
-			wordStart = strings.IndexByte(" \t\n;&|()", c) >= 0
 		}
 	}
-	return found, nil
+	return out
 }
 
-func copyFolder(to string) error {
-	return filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+func copyFolder(from, to string) error {
+	return filepath.WalkDir(from, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		target := filepath.Join(to, path)
+		rel, err := filepath.Rel(from, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(to, rel)
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
@@ -156,82 +144,121 @@ func copyFolder(to string) error {
 	})
 }
 
-func appendLine(name, line string) error {
-	if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+func appendLine(path, line string) error {
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	old, err := os.ReadFile(name)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		data = append(data, '\n')
 	}
-	if len(old) > 0 && old[len(old)-1] != '\n' {
-		old = append(old, '\n')
+	data = append(data, line...)
+	data = append(data, '\n')
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
 	}
-	return os.WriteFile(name, append(old, line+"\n"...), 0o644)
+	return os.WriteFile(path, data, mode)
 }
 
-func try(change string, k *knowledge) ([]result, error) {
-	if k.m.kind != "" {
-		return nil, fmt.Errorf("a change cannot be tried while this run is %s", k.m.kind)
+func tryChange(k *knowledge, tool, change string) []outcome {
+	if os.Getenv(changeVariable) != "" {
+		return nil
 	}
-	run, place := "", ""
-	for _, f := range k.ask(tools, "[tool] runs [file]") {
-		if f[0] == str("try") {
-			run = textOf(f[1])
-		}
-	}
-	for _, f := range k.ask(tools, "[tool] reads [place]") {
-		if f[0] == str("try") {
-			place = textOf(f[1])
-		}
-	}
-	if run == "" {
-		return nil, fmt.Errorf("try has nothing to run")
-	}
-	dir, err := os.MkdirTemp("", "try")
+	dir, err := os.MkdirTemp("", "change-")
 	if err != nil {
-		return nil, err
+		return nil
 	}
 	defer os.RemoveAll(dir)
-	if err := copyFolder(dir); err != nil {
-		return nil, err
+	if copyFolder(".", dir) != nil {
+		return nil
 	}
-	for _, f := range k.ask(tools, "[change] adds line [file] [line]") {
-		if f[0] != str(change) {
+	if k.executes(toolsFile, "adds line", 3) {
+		var adds [][2]string
+		for _, row := range k.facts("adds line", 3) {
+			if constText(row[0]) == change {
+				adds = append(adds, [2]string{constText(row[1]), constText(row[2])})
+			}
+		}
+		sort.Slice(adds, func(i, j int) bool {
+			if adds[i][0] != adds[j][0] {
+				return adds[i][0] < adds[j][0]
+			}
+			return adds[i][1] < adds[j][1]
+		})
+		for _, a := range adds {
+			if !filepath.IsLocal(a[0]) || appendLine(filepath.Join(dir, a[0]), a[1]) != nil {
+				return nil
+			}
+		}
+	}
+	var places []ast.Constant
+	if k.executes(toolsFile, "reads", 2) {
+		places = k.objects("reads", tool)
+	}
+	var out []outcome
+	for _, f := range k.objects("runs", tool) {
+		file := constText(f)
+		if !filepath.IsLocal(file) {
 			continue
 		}
-		if !filepath.IsLocal(textOf(f[1])) {
-			return nil, fmt.Errorf("%s is outside the folder", textOf(f[1]))
+		ctx, cancel := context.WithTimeout(context.Background(), runLimit)
+		cmd := exec.CommandContext(ctx, "sh", file)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), changeVariable+"="+change)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		cmd.Run()
+		cancel()
+		code := -1
+		if cmd.ProcessState != nil {
+			code = cmd.ProcessState.ExitCode()
 		}
-		if err := appendLine(filepath.Join(dir, textOf(f[1])), textOf(f[2])); err != nil {
-			return nil, err
+		out = append(out, outcome{"exit code", ast.Number(int64(code))})
+		for _, p := range places {
+			switch constText(p) {
+			case "standard output":
+				out = append(out, reasons(stdout.String())...)
+			case "standard error":
+				out = append(out, reasons(stderr.String())...)
+			}
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), trialLimit)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "sh", run, trialKind)
-	cmd.Dir = dir
-	var out bytes.Buffer
-	if place == "standard output" {
-		cmd.Stdout = &out
+	return out
+}
+
+func reasons(text string) []outcome {
+	clauses, _ := readText("the output", text)
+	var out []outcome
+	seen := map[string]bool{}
+	add := func(field string, value ast.Constant) {
+		key := field + "\x00" + value.String()
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, outcome{field, value})
+		}
 	}
-	var exit *exec.ExitError
-	if err := cmd.Run(); err != nil && !errors.As(err, &exit) {
-		return nil, err
-	}
-	if ctx.Err() != nil {
-		return nil, fmt.Errorf("trying %s took too long", change)
-	}
-	found := []result{{"exit code", num(int64(cmd.ProcessState.ExitCode()))}}
-	for _, line := range strings.Split(out.String(), "\n") {
-		if line == "" || line[0] == ' ' {
+	for _, c := range clauses {
+		h := c.head
+		if len(c.body) > 0 || h.kind != atomLit {
 			continue
 		}
-		l, err := readLiteral(line)
-		if err != nil || l.shape != relationShape || l.word != "breaks" || len(l.args) != 2 || !l.ground() {
+		var args []ast.Constant
+		for _, t := range h.args {
+			if v, ok := t.constant(); ok {
+				args = append(args, v)
+			}
+		}
+		if len(args) != len(h.args) {
 			continue
 		}
-		found = append(found, result{"broke", l.args[1]}, result{"why", str(line)})
+		switch {
+		case h.word == "breaks" && len(args) == 2:
+			add("broke", args[1])
+			add("why", ast.String(h.sentence()))
+		case h.word == "a problem" && len(args) == 1:
+			add("why", ast.String(h.sentence()))
+		}
 	}
-	return found, nil
+	return out
 }
