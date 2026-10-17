@@ -165,21 +165,8 @@ this run is a change
     if a change, is, the kind of this run
 [change], is, a change
     if [change], adds line, [any file], [any line]
-[change], is, missed
-    if [change], must break, [law]
-    and not [change], broke, [law]
-[change], is, answered otherwise
-    if [change], must answer, [answer]
-    and not [change], answered, [answer]
-[change], is, as stated
-    if [change], is, a change
-    and not [change], is, missed
-    and not [change], is, answered otherwise
 [law], is, a law
     if [any rule], lays down, [law]
-[change], is, about an unknown law
-    if [change], must break, [law]
-    and not [law], is, a law
 [law], is, proven
     if [change], broke, [law]
     and [change], explains, [any line]
@@ -191,11 +178,16 @@ this run is a change
     if [law], is, a law
     and not [law], is, proven
 [change], breaks, Every change comes out as stated
-    if [change], is, a change
+    if [change], must break, [law]
     and not this run is a change
-    and not [change], is, as stated
+    and not [change], broke, [law]
 [change], breaks, Every change comes out as stated
-    if [change], is, about an unknown law
+    if [change], must answer, [answer]
+    and not this run is a change
+    and not [change], answered, [answer]
+[change], breaks, Every change comes out as stated
+    if [change], must break, [law]
+    and not [law], is, a law
 
 a law with no counterexample, adds line, workflow.plain, "something, breaks, A law with no counterexample"
 a law with no counterexample, must break, Every law has a counterexample
@@ -211,12 +203,6 @@ a change that expects an unknown law, must break, Every change comes out as stat
 [word], rests on, [other]
     if [rule], defines, [word]
     and [rule], refers to, [other]
-    and [word], differs from, breaks
-[law], rests on, [other]
-    if [rule], lays down, [law]
-    and [rule], refers to, [other]
-breaks, rests on, [law]
-    if [law], is, a law
 [word], is, used
     if [anyone], executes instruction, [fact pattern]
     and [fact pattern], names, [word]
@@ -266,4 +252,3 @@ the knowledge view, shows, [change] broke [law]
 the knowledge view, shows, [change] answered [answer]
 the knowledge view, shows, [change] explains [line]
 the knowledge view, shows, [text] is a problem
-the knowledge view, shows, [line] is misread
