@@ -1,7 +1,11 @@
 cd "$(dirname "$0")" || exit 2
-machine="$(mktemp)" || exit 2
-go build -o "$machine" . || exit 2
-"$machine" spec.plain
-answer=$?
-rm -f "$machine"
+place=$(mktemp -d) || exit 2
+if go build -o "$place/machine" .
+then
+	"$place/machine" "$@"
+	answer=$?
+else
+	answer=2
+fi
+rm -rf "$place"
 exit "$answer"

@@ -6,26 +6,12 @@ command: list the folder, uses, list, the folder
     if [file], written in, [language]
     and [tool], finds comments in, [language]
     and [command], is the join of, "command: find the comments in ", [file]
-
-[file], has the comment, [text]
+[file], has the comment, [comment]
     if [command], uses, [tool], [file]
     and [tool], finds comments in, [any language]
-    and [command], returned, comment, [text]
+    and [command], returned, comment, [comment]
 
 [command], uses, try, [change]
     if [change], is, a change
     and not this run is a change
     and [command], is the join of, "command: try ", [change]
-
-[change], broke, [law]
-    if [command], uses, try, [change]
-    and [command], returned, broke, [law]
-
-[change], answered, [answer]
-    if [command], uses, try, [change]
-    and [command], returned, exit code, [code]
-    and [answer], exits with, [code]
-
-[change], explains, [line]
-    if [command], uses, try, [change]
-    and [command], returned, why, [line]
