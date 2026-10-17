@@ -77,14 +77,14 @@ a command with two tools, adds line, workflow.plain, "command: a mix-up, uses, l
 a command with two tools, adds line, workflow.plain, "command: a mix-up, uses, find go comments, tools.go"
 a command with two tools, must break, Every tool returns only what the catalog lists
 
-[file], is, used
+[file], is, a used file
     if [anyone], loads, [file]
-[file], is, used
+[file], is, a used file
     if [file], is, part of the machine
 
 [file], breaks, Every file is used
     if [file], is, in the folder
-    and not [file], is, used
+    and not [file], is, a used file
 
 a file nobody uses, adds line, notes.plain, "a, is, a note"
 a file nobody uses, must break, Every file is used
@@ -112,8 +112,8 @@ a spec that looks for itself, must break, Each word has one creator
 "spec.plain, is, in the folder", means in mangle, in_the_folder("spec.plain").
 a law is broken, means in mangle, a_law_is_broken().
 "command: list the folder, uses, list, the folder", means in mangle, 'uses("command: list the folder", "list", "the folder").'
-"[file], is, used", means in mangle, used(File).
-"[any file], is, used", means in mangle, used(AnyFile).
+"[file], is, a used file", means in mangle, a_used_file(File).
+"[any file], is, a used file", means in mangle, a_used_file(AnyFile).
 "true, exits with, 0", means in mangle, 'exits_with("true", 0).'
 'a change, adds line, notes.plain, "a, is, a note"', means in mangle, 'adds_line("a change", "notes.plain", "a, is, a note").'
 "[file], ends with, [ending]", means in mangle, ":string:ends_with(File, Ending)"
@@ -195,16 +195,16 @@ a change that expects an unknown law, must break, Every change comes out as stat
 [word], rests on, [other]
     if [rule], defines, [word]
     and [rule], refers to, [other]
-[word], is, used
+[word], is, a used word
     if [anyone], executes instruction, [fact pattern]
     and [fact pattern], names, [word]
-[other], is, used
+[other], is, a used word
     if [word], rests on, [other]
-    and [word], is, used
+    and [word], is, a used word
 
 [word], breaks, Every word is used
     if [word], is, a word
-    and not [word], is, used
+    and not [word], is, a used word
 
 a word nobody uses, adds line, spec.plain, "a, is, lonely"
 a word nobody uses, must break, Every word is used
