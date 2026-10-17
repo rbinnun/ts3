@@ -16,8 +16,6 @@ engine.go, executes instruction, [go file] prints [view]
 engine.go, executes instruction, [go file] prints in [language]
 engine.go, executes instruction, [go file] prints to [place]
 engine.go, executes instruction, [rule] is in the knowledge view
-engine.go, executes instruction, [word] is observed
-engine.go, executes instruction, [view] reproduces [fact pattern]
 engine.go, executes instruction, [view] shows [fact pattern]
 tools.go, executes instruction, [tool] runs [file]
 tools.go, executes instruction, [tool] reads [place]
@@ -232,11 +230,13 @@ a spec that cannot load, must answer, broken
     and [fact pattern], names, [word]
     and [go file], written in, go
 
+the knowledge view, shows, [fact pattern]
+    if [fact pattern], names, [word]
+    and [word], is, observed
+
 engine.go, prints, the knowledge view
 engine.go, prints in, plain language
 engine.go, prints to, standard output
-the knowledge view, reproduces, [folder] conforms [answer]
-the knowledge view, reproduces, [thing] breaks [law]
 the knowledge view, shows, [folder] conforms [answer]
 the knowledge view, shows, [thing] breaks [law]
 the knowledge view, shows, [change] broke [law]
