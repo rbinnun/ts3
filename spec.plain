@@ -25,10 +25,10 @@ tools.go, executes instruction, [change] adds line [file] [line]
 engine.go, executes instruction, [file] creates fact [fact pattern]
 
 tools.go, creates fact, [command] returned [field] [value]
-engine.go, creates fact, [kind] is the kind of this run
+engine.go, creates fact, this run is a change
 engine.go, creates fact, [text] is a problem
 engine.go, creates fact, [line] is misread
-engine.go, creates fact, [rule] is in [file]
+engine.go, creates fact, [file] has a rule for [word]
 engine.go, creates fact, [rule] defines [word]
 engine.go, creates fact, [rule] refers to [word]
 engine.go, creates fact, [rule] lays down [law]
@@ -98,10 +98,6 @@ a file nobody uses, must break, Every file is used
 a missing workflow, adds line, spec.plain, "engine.go, loads, missing.plain"
 a missing workflow, must break, Every file engine.go loads is in the folder
 
-[file], has a rule for, [word]
-    if [rule], is in, [file]
-    and [rule], defines, [word]
-
 [file], breaks, Each word has one creator
     if [file], has a rule for, [word]
     and [fact pattern], names, [word]
@@ -161,8 +157,6 @@ a file that is not datalog, must break, The only knowledge is Datalog
 a comment, adds line, tools.go, // a note
 a comment, must break, The only knowledge is Datalog
 
-this run is a change
-    if a change, is, the kind of this run
 [change], is, a change
     if [change], adds line, [any file], [any line]
 [law], is, a law
@@ -231,15 +225,12 @@ a spec that cannot load, adds line, spec.plain, "a, b"
 a spec that cannot load, must answer, broken
 
 [rule], is, in the knowledge view
-    if [rule], defines, [word]
-    and [word], is, used
+    if [rule], defines, [any word]
 
 [word], is, observed
-    if [word], is, used
-    and not [word], is, defined by a rule
-
-[word], is, defined by a rule
-    if [any rule], defines, [word]
+    if [go file], creates fact, [fact pattern]
+    and [fact pattern], names, [word]
+    and [go file], written in, go
 
 engine.go, prints, the knowledge view
 engine.go, prints in, plain language
