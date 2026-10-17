@@ -1,0 +1,292 @@
+engine.go, loads, spec.plain
+engine.go, loads, workflow.plain
+engine.go, is, part of the machine
+tools.go, is, part of the machine
+runme.sh, is, part of the machine
+go.mod, is, part of the machine
+go.sum, is, part of the machine
+
+engine.go, executes instruction, [go file] loads [plain file]
+engine.go, executes instruction, [plain] means in mangle [mangle]
+engine.go, executes instruction, [command] uses [tool] [input]
+engine.go, executes instruction, [answer] exits with [code]
+engine.go, executes instruction, [go file] prints [pattern]
+engine.go, executes instruction, [go file] prints in [language]
+engine.go, executes instruction, [go file] prints to [place]
+tools.go, executes instruction, [tool] runs [file]
+tools.go, executes instruction, [tool] reads [place]
+tools.go, executes instruction, [change] adds line [file] [line]
+
+tools.go, creates fact, [command] returned [field] [value]
+engine.go, creates fact, [kind] is the kind of this run
+engine.go, creates fact, [text] is a problem
+engine.go, creates fact, [line] is misread
+workflow.plain, creates fact, [file] is in the folder
+workflow.plain, creates fact, [file] has the comment [text]
+workflow.plain, creates fact, [file] has lines [count]
+workflow.plain, creates fact, [rule] is in [file]
+workflow.plain, creates fact, [rule] defines [word]
+workflow.plain, creates fact, [rule] refers to [word]
+workflow.plain, creates fact, [rule] lays down [law]
+workflow.plain, creates fact, [change] broke [law]
+workflow.plain, creates fact, [change] answered [answer]
+workflow.plain, creates fact, [rule] is never fired
+workflow.plain, creates fact, [pattern] names [word]
+
+declared: [command], uses, [tool], [input]
+declared: [command], returned, [field], [value]
+declared: [kind], is, the kind of this run
+declared: [text], is, a problem
+declared: [file], is, in the folder
+declared: [file], has the comment, [text]
+declared: [file], has lines, [count]
+declared: [rule], is in, [file]
+declared: [rule], defines, [word]
+declared: [rule], refers to, [word]
+declared: [rule], lays down, [law]
+declared: [change], broke, [law]
+declared: [change], answered, [answer]
+declared: [rule], is, never fired
+declared: [pattern], names, [word]
+declared: [line], is, misread
+
+list, returns, file
+count lines, returns, lines
+find go comments, returns, comment
+find sh comments, returns, comment
+find go comments, finds comments in, go
+find sh comments, finds comments in, sh
+parse, returns, rule
+read a rule, returns, word it defines
+read a rule, returns, law it lays down
+read a rule, returns, word it refers to
+see what fired, returns, rule that fired
+try, runs, runme.sh
+try, reads, standard output
+try, returns, exit code
+try, returns, broke
+try, returns, never fired
+read a pattern, returns, word it names
+
+[tool], is, in the catalog
+    if [tool], returns, [anything]
+[command], is, named as a command
+    if [command], uses, [any tool], [any input]
+    and [command], starts with, "command: "
+
+[command], breaks, Every command uses a tool in the catalog
+    if [command], uses, [tool], [any input]
+    and not [tool], is, in the catalog
+[command], breaks, Every command is named as a command
+    if [command], uses, [any tool], [any input]
+    and not [command], is, named as a command
+
+a command with a tool nobody has, adds line, workflow.plain, "command: guess, uses, guess, x"
+a command with a tool nobody has, must break, Every command uses a tool in the catalog
+
+a command not named as a command, adds line, workflow.plain, "list it, uses, list, the folder"
+a command not named as a command, must break, Every command is named as a command
+
+[command], breaks, Every tool returns only what the catalog lists
+    if [command], returned, [field], [any value]
+    and [command], uses, [tool], [any input]
+    and not [tool], returns, [field]
+
+a command with two tools, adds line, workflow.plain, "command: a mix-up, uses, list, the folder"
+a command with two tools, adds line, workflow.plain, "command: a mix-up, uses, count lines, spec.plain"
+a command with two tools, must break, Every tool returns only what the catalog lists
+
+[file], is, used
+    if [anyone], loads, [file]
+[file], is, used
+    if [file], is, part of the machine
+
+[file], breaks, Every file is used
+    if [file], is, in the folder
+    and not [file], is, used
+
+a file nobody uses, adds line, notes.plain, "a, is, a note"
+a file nobody uses, must break, Every file is used
+
+[file], breaks, Every file engine.go loads is in the folder
+    if engine.go, loads, [file]
+    and not [file], is, in the folder
+
+a missing workflow, adds line, spec.plain, "engine.go, loads, missing.plain"
+a missing workflow, must break, Every file engine.go loads is in the folder
+
+[file], has a rule for, [word]
+    if [rule], is in, [file]
+    and [rule], defines, [word]
+
+[file], breaks, Each word has one creator
+    if [file], has a rule for, [word]
+    and [pattern], names, [word]
+    and [creator], creates fact, [pattern]
+    and [creator], differs from, [file]
+
+a workflow that fakes what the tools returned, adds line, workflow.plain, "command: a fake, returned, file, nowhere"
+a workflow that fakes what the tools returned, must break, Each word has one creator
+
+a spec that looks for itself, adds line, spec.plain, "ghost.txt, is, in the folder"
+a spec that looks for itself, must break, Each word has one creator
+
+"engine.go, loads, spec.plain", means in mangle, 'loads("engine.go", "spec.plain").'
+"spec.plain, is, in the folder", means in mangle, in_the_folder("spec.plain").
+a law is broken, means in mangle, a_law_is_broken().
+"command: list the folder, uses, list, the folder", means in mangle, 'uses("command: list the folder", "list", "the folder").'
+"[file], is, used", means in mangle, used(File).
+"[any file], is, used", means in mangle, used(AnyFile).
+"true, exits with, 0", means in mangle, 'exits_with("true", 0).'
+'a change, adds line, notes.plain, "a, is, a note"', means in mangle, 'adds_line("a change", "notes.plain", "a, is, a note").'
+"[file], ends with, [ending]", means in mangle, ":string:ends_with(File, Ending)"
+"[command], starts with, [prefix]", means in mangle, ":string:starts_with(Command, Prefix)"
+"[file], differs from, [other file]", means in mangle, File != OtherFile
+'[command], is the join of, "command: count the lines of ", [file]', means in mangle, 'Command = fn:string:concat("command: count the lines of ", File)'
+"declared: [rule], is, never fired", means in mangle, Decl never_fired(Rule).
+
+[line], breaks, Every line reads back as written
+    if [line], is, misread
+
+a line that reads back differently, adds line, spec.plain, '"zzz", means, nothing'
+a line that reads back differently, must break, Every line reads back as written
+
+.plain, means, plain language
+.go, means, go
+go.mod, means, go module
+go.sum, means, go checksums
+.sh, means, sh
+
+[file], written in, [language]
+    if [file], is, in the folder
+    and [ending], means, [language]
+    and [file], ends with, [ending]
+[file], is, known
+    if [file], written in, [any language]
+
+[file], breaks, The only knowledge is Datalog
+    if [file], is, in the folder
+    and not [file], is, known
+[file], breaks, The only knowledge is Datalog
+    if [file], has the comment, [any comment]
+
+a file that is not datalog, adds line, notes.txt, a note
+a file that is not datalog, must break, The only knowledge is Datalog
+
+a comment, adds line, tools.go, // a note
+a comment, must break, The only knowledge is Datalog
+
+this run is a change
+    if a change, is, the kind of this run
+[change], is, a change
+    if [change], adds line, [any file], [any line]
+[change], is, missed
+    if [change], must break, [law]
+    and not [change], broke, [law]
+[change], is, answered otherwise
+    if [change], must answer, [answer]
+    and not [change], answered, [answer]
+[change], is, as stated
+    if [change], is, a change
+    and not [change], is, missed
+    and not [change], is, answered otherwise
+[law], is, a law
+    if [any rule], lays down, [law]
+[change], is, about an unknown law
+    if [change], must break, [law]
+    and not [law], is, a law
+[law], is, proven
+    if [any change], broke, [law]
+[law], is, proven
+    if this run is a change
+    and [any change], must break, [law]
+
+[law], breaks, Every law has a counterexample
+    if [law], is, a law
+    and not [law], is, proven
+[change], breaks, Every change comes out as stated
+    if [change], is, a change
+    and not this run is a change
+    and not [change], is, as stated
+[change], breaks, Every change comes out as stated
+    if [change], is, about an unknown law
+
+a law with no counterexample, adds line, workflow.plain, "something, breaks, A law with no counterexample"
+a law with no counterexample, must break, Every law has a counterexample
+
+a change that expects an unknown law, adds line, workflow.plain, "a ghost change, must break, A law nobody laid down"
+a change that expects an unknown law, must break, Every change comes out as stated
+
+[word], is, a word
+    if spec.plain, has a rule for, [word]
+[word], is, a word
+    if [anyone], creates fact, [pattern]
+    and [pattern], names, [word]
+[word], rests on, [other]
+    if [rule], defines, [word]
+    and [rule], refers to, [other]
+    and [word], differs from, breaks
+[law], rests on, [other]
+    if [rule], lays down, [law]
+    and [rule], refers to, [other]
+breaks, rests on, [law]
+    if [law], is, a law
+prints, rests on, [word]
+    if [anyone], prints, [pattern]
+    and [pattern], names, [word]
+[word], is, used
+    if [anyone], executes instruction, [pattern]
+    and [pattern], names, [word]
+[other], is, used
+    if [word], rests on, [other]
+    and [word], is, used
+
+[word], breaks, Every word is used
+    if [word], is, a word
+    and not [word], is, used
+
+a word nobody uses, adds line, spec.plain, "a, is, lonely"
+a word nobody uses, must break, Every word is used
+
+a law is broken
+    if [anything], breaks, [any law]
+the folder, conforms, false
+    if a law is broken
+the folder, conforms, true
+    if not a law is broken
+true, exits with, 0
+false, exits with, 1
+broken, exits with, 2
+
+a spec that cannot load, adds line, spec.plain, "a, b"
+a spec that cannot load, must answer, broken
+
+engine.go, prints in, plain language
+engine.go, prints to, standard output
+engine.go, prints, [folder] conforms [answer]
+engine.go, prints, [thing] breaks [law]
+engine.go, prints, [change] broke [law]
+engine.go, prints, [change] answered [answer]
+engine.go, prints, [rule] is never fired
+engine.go, prints, [file] has lines [count]
+engine.go, prints, [text] is a problem
+engine.go, prints, [line] is misread
+engine.go, prints, [concept] is a concept
+engine.go, prints, [concept] is made of [rule]
+engine.go, prints, [concept] is tested by [change]
+engine.go, prints, [rule] defines [word]
+engine.go, prints, [rule] refers to [word]
+engine.go, prints, [rule] is in [file]
+engine.go, prints, [word] rests on [other word]
+
+The folder conforms to the spec, is, a concept
+[law], is, a concept
+    if [law], is, a law
+The folder conforms to the spec, is made of, [rule]
+    if [rule], defines, conforms
+[law], is made of, [rule]
+    if [rule], lays down, [law]
+The folder conforms to the spec, is tested by, [change]
+    if [change], must answer, [any answer]
+[law], is tested by, [change]
+    if [change], must break, [law]
