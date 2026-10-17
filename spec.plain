@@ -28,11 +28,11 @@ tools.go, creates fact, [command] returned [field] [value]
 engine.go, creates fact, this run is a change
 engine.go, creates fact, [text] is a problem
 engine.go, creates fact, [line] is misread
-engine.go, creates fact, [file] has a rule for [word]
-engine.go, creates fact, [rule] defines [word]
-engine.go, creates fact, [rule] refers to [word]
+engine.go, creates fact, [file] has a rule for [predicate]
+engine.go, creates fact, [rule] defines [predicate]
+engine.go, creates fact, [rule] refers to [predicate]
 engine.go, creates fact, [rule] lays down [law]
-engine.go, creates fact, [fact pattern] names [word]
+engine.go, creates fact, [fact pattern] names [predicate]
 engine.go, creates fact, [fact] holds because [reason]
 workflow.plain, creates fact, [command] uses [tool] [input]
 workflow.plain, creates fact, [file] is in the folder
@@ -99,17 +99,17 @@ a file nobody uses, must break, Every file is used
 a missing workflow, adds line, spec.plain, "engine.go, loads, missing.plain"
 a missing workflow, must break, Every file engine.go loads is in the folder
 
-[file], breaks, Each word has one creator
-    if [file], has a rule for, [word]
-    and [fact pattern], names, [word]
+[file], breaks, Each predicate has one creator
+    if [file], has a rule for, [predicate]
+    and [fact pattern], names, [predicate]
     and [creator], creates fact, [fact pattern]
     and [creator], differs from, [file]
 
 a workflow that fakes what the tools returned, adds line, workflow.plain, "command: a fake, returned, file, nowhere"
-a workflow that fakes what the tools returned, must break, Each word has one creator
+a workflow that fakes what the tools returned, must break, Each predicate has one creator
 
 a spec that looks for itself, adds line, spec.plain, "ghost.txt, is, in the folder"
-a spec that looks for itself, must break, Each word has one creator
+a spec that looks for itself, must break, Each predicate has one creator
 
 "engine.go, loads, spec.plain", means in mangle, 'loads("engine.go", "spec.plain").'
 "spec.plain, is, in the folder", means in mangle, in_the_folder("spec.plain").
@@ -190,27 +190,27 @@ a law with no counterexample, must break, Every law has a counterexample
 a change that expects an unknown law, adds line, workflow.plain, "a ghost change, must break, A law nobody laid down"
 a change that expects an unknown law, must break, Every change comes out as stated
 
-[word], is, a word
-    if spec.plain, has a rule for, [word]
-[word], is, a word
+[predicate], is, a predicate
+    if spec.plain, has a rule for, [predicate]
+[predicate], is, a predicate
     if [anyone], creates fact, [fact pattern]
-    and [fact pattern], names, [word]
-[word], rests on, [other]
-    if [rule], defines, [word]
+    and [fact pattern], names, [predicate]
+[predicate], rests on, [other]
+    if [rule], defines, [predicate]
     and [rule], refers to, [other]
-[word], is, a used word
+[predicate], is, a used predicate
     if [anyone], executes instruction, [fact pattern]
-    and [fact pattern], names, [word]
-[other], is, a used word
-    if [word], rests on, [other]
-    and [word], is, a used word
+    and [fact pattern], names, [predicate]
+[other], is, a used predicate
+    if [predicate], rests on, [other]
+    and [predicate], is, a used predicate
 
-[word], breaks, Every word is used
-    if [word], is, a word
-    and not [word], is, a used word
+[predicate], breaks, Every predicate is used
+    if [predicate], is, a predicate
+    and not [predicate], is, a used predicate
 
-a word nobody uses, adds line, spec.plain, "a, is, lonely"
-a word nobody uses, must break, Every word is used
+a predicate nobody uses, adds line, spec.plain, "a, is, lonely"
+a predicate nobody uses, must break, Every predicate is used
 
 a law is broken
     if [anything], breaks, [any law]
@@ -226,16 +226,16 @@ a spec that cannot load, adds line, spec.plain, "a, b"
 a spec that cannot load, must answer, broken
 
 [rule], is, in the knowledge view
-    if [rule], defines, [any word]
+    if [rule], defines, [any predicate]
 
-[word], is, observed
+[predicate], is, observed
     if [go file], creates fact, [fact pattern]
-    and [fact pattern], names, [word]
+    and [fact pattern], names, [predicate]
     and [go file], written in, go
 
 the knowledge view, shows, [fact pattern]
-    if [fact pattern], names, [word]
-    and [word], is, observed
+    if [fact pattern], names, [predicate]
+    and [predicate], is, observed
 
 engine.go, prints, the knowledge view
 engine.go, prints in, plain language
