@@ -73,13 +73,13 @@ must_break("a command with a tool nobody has", "Every command uses a tool in the
 adds_line("a command not named as a command", "workflow.mg", 'uses("list it", "list", "the folder").').
 must_break("a command not named as a command", "Every command is named as a command").
 
-given_a_role(File) :- loads(_, File).
-given_a_role(File) :- part_of_the_machine(File).
+used(File) :- loads(_, File).
+used(File) :- part_of_the_machine(File).
 
-breaks(File, "Every file has a role") :- in_the_folder(File), !given_a_role(File).
+breaks(File, "Every file is used") :- in_the_folder(File), !used(File).
 
-adds_line("a file with no role", "notes.mg", 'note("a").').
-must_break("a file with no role", "Every file has a role").
+adds_line("a file nobody uses", "notes.mg", 'note("a").').
+must_break("a file nobody uses", "Every file is used").
 
 breaks(File, "Every file engine.go loads is in the folder") :- loads("engine.go", File), !in_the_folder(File).
 
