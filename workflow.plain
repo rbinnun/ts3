@@ -27,3 +27,7 @@ command: list the folder, uses, list, the folder
     if [command], uses, try, [change]
     and [command], returned, exit code, [code]
     and [answer], exits with, [code]
+
+[change], explains, [line]
+    if [command], uses, try, [change]
+    and [command], returned, why, [line]

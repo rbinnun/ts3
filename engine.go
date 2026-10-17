@@ -35,7 +35,7 @@ var (
 	mangleEscapes = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\t", `\t`)
 	tests         = map[string]string{"starts with": ":string:starts_with", "ends with": ":string:ends_with"}
 	testWords     = map[string]string{":string:starts_with": "starts with", ":string:ends_with": "ends with"}
-	patternVerbs  = []string{"creates fact", "executes instruction", "prints", "shows", "unrolls"}
+	patternVerbs  = []string{"creates fact", "executes instruction", "prints", "shows", "reproduces"}
 	readings      sync.Map
 )
 
@@ -572,7 +572,7 @@ func (r *run) print() {
 }
 
 func (r *run) sections(view ast.BaseTerm) []section {
-	entries := append(r.facts("shows", view, ast.Variable{Symbol: "X"}), r.facts("unrolls", view, ast.Variable{Symbol: "X"})...)
+	entries := append(r.facts("shows", view, ast.Variable{Symbol: "X"}), r.facts("reproduces", view, ast.Variable{Symbol: "X"})...)
 	if len(entries) == 0 {
 		entries = []ast.Atom{relation("shows", view, view)}
 	}
@@ -591,7 +591,7 @@ func (r *run) sections(view ast.BaseTerm) []section {
 			at[key] = i
 			sections = append(sections, section{pattern: p})
 		}
-		if e.Predicate.Symbol == nameOf("unrolls") {
+		if e.Predicate.Symbol == nameOf("reproduces") {
 			sections[i].unrolled = true
 		}
 	}

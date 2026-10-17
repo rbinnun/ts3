@@ -154,16 +154,34 @@ func try(r *run, name, change string) []finding {
 		return nil
 	}
 	found := []finding{says("exit code", ast.Number(int64(cmd.ProcessState.ExitCode())))}
+	broke := false
 	for _, line := range strings.Split(out.String(), "\n") {
-		if line == "" || line[0] == ' ' || line[0] == '\t' {
-			continue
-		}
-		p, err := readPremise(line)
-		if err == nil && p.shape == relationShape && p.name == nameOf("breaks") && len(p.args) == 2 && p.args[1].isText() {
-			found = append(found, says("broke", ast.String(p.args[1].text)))
+		switch {
+		case line == "":
+			broke = false
+		case line[0] == ' ' || line[0] == '\t':
+			if why, ok := reasonOf(line); ok && broke {
+				found = append(found, says("why", ast.String(why)))
+			}
+		default:
+			p, err := readPremise(line)
+			broke = err == nil && p.shape == relationShape && p.name == nameOf("breaks") && len(p.args) == 2 && p.args[1].isText()
+			if broke {
+				found = append(found, says("broke", ast.String(p.args[1].text)))
+			}
 		}
 	}
 	return found
+}
+
+func reasonOf(line string) (string, bool) {
+	text := strings.TrimLeft(line, " \t")
+	for _, keyword := range []string{"if ", "and "} {
+		if reason, ok := strings.CutPrefix(text, keyword); ok && reason != "" {
+			return reason, true
+		}
+	}
+	return "", false
 }
 
 func copyFile(from, to string) error {
