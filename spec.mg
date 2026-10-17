@@ -6,29 +6,29 @@ part_of_the_machine("runme.sh").
 part_of_the_machine("go.mod").
 part_of_the_machine("go.sum").
 
-implements("engine.go", "Program loads File").
-implements("engine.go", "Command uses Tool Input").
-implements("engine.go", "Answer exits with Code").
-implements("engine.go", "Printer prints Pattern").
-implements("engine.go", "Printer prints in Language").
-implements("engine.go", "Printer prints to Place").
-implements("tools.go", "Tool runs File").
-implements("tools.go", "Tool reads Place").
+implements("engine.go", "[go file] loads [mangle file]").
+implements("engine.go", "[command] uses [tool] [input]").
+implements("engine.go", "[answer] exits with [code]").
+implements("engine.go", "[go file] prints [pattern]").
+implements("engine.go", "[go file] prints in [language]").
+implements("engine.go", "[go file] prints to [place]").
+implements("tools.go", "[tool] runs [file]").
+implements("tools.go", "[tool] reads [place]").
 
-writes("tools.go", "Command returned Field Value").
-writes("engine.go", "Kind is the kind of this run").
-writes("engine.go", "Text is a problem").
-writes("workflow.mg", "File is in the folder").
-writes("workflow.mg", "File has the comment Text").
-writes("workflow.mg", "File has lines Count").
-writes("workflow.mg", "Rule is in File").
-writes("workflow.mg", "Rule defines Word").
-writes("workflow.mg", "Rule refers to Word").
-writes("workflow.mg", "Rule lays down Law").
-writes("workflow.mg", "Change broke Law").
-writes("workflow.mg", "Change answered Answer").
-writes("workflow.mg", "Rule is never fired").
-writes("workflow.mg", "Pattern names Word").
+writes("tools.go", "[command] returned [field] [value]").
+writes("engine.go", "[kind] is the kind of this run").
+writes("engine.go", "[text] is a problem").
+writes("workflow.mg", "[file] is in the folder").
+writes("workflow.mg", "[file] has the comment [text]").
+writes("workflow.mg", "[file] has lines [count]").
+writes("workflow.mg", "[rule] is in [file]").
+writes("workflow.mg", "[rule] defines [word]").
+writes("workflow.mg", "[rule] refers to [word]").
+writes("workflow.mg", "[rule] lays down [law]").
+writes("workflow.mg", "[change] broke [law]").
+writes("workflow.mg", "[change] answered [answer]").
+writes("workflow.mg", "[rule] is never fired").
+writes("workflow.mg", "[pattern] names [word]").
 
 Decl uses(Command, Tool, Input).
 Decl returned(Command, Field, Value).
@@ -163,20 +163,20 @@ must_answer("a spec that cannot load", "broken").
 
 prints_in("engine.go", "mangle").
 prints_to("engine.go", "standard output").
-prints("engine.go", "Folder conforms Answer").
-prints("engine.go", "Thing breaks Law").
-prints("engine.go", "Change broke Law").
-prints("engine.go", "Change answered Answer").
-prints("engine.go", "Rule is never fired").
-prints("engine.go", "File has lines Count").
-prints("engine.go", "Text is a problem").
-prints("engine.go", "Concept is a concept").
-prints("engine.go", "Concept is made of Rule").
-prints("engine.go", "Concept is tested by Change").
-prints("engine.go", "Rule defines Word").
-prints("engine.go", "Rule refers to Word").
-prints("engine.go", "Rule is in File").
-prints("engine.go", "Word rests on Other").
+prints("engine.go", "[folder] conforms [answer]").
+prints("engine.go", "[thing] breaks [law]").
+prints("engine.go", "[change] broke [law]").
+prints("engine.go", "[change] answered [answer]").
+prints("engine.go", "[rule] is never fired").
+prints("engine.go", "[file] has lines [count]").
+prints("engine.go", "[text] is a problem").
+prints("engine.go", "[concept] is a concept").
+prints("engine.go", "[concept] is made of [rule]").
+prints("engine.go", "[concept] is tested by [change]").
+prints("engine.go", "[rule] defines [word]").
+prints("engine.go", "[rule] refers to [word]").
+prints("engine.go", "[rule] is in [file]").
+prints("engine.go", "[word] rests on [other word]").
 
 a_concept("The folder conforms to the spec").
 a_concept(Law) :- a_law(Law).
