@@ -7,30 +7,31 @@ part_of_the_machine("run.me").
 part_of_the_machine("go.mod").
 part_of_the_machine("go.sum").
 
-reads_the_word("engine.go", "loads").
-reads_the_word("engine.go", "uses").
-reads_the_word("engine.go", "conforms").
-reads_the_word("engine.go", "exits_with").
-reads_the_word("engine.go", "prints").
-reads_the_word("engine.go", "prints_in").
-reads_the_word("engine.go", "prints_to").
-reads_the_word("tools.go", "conforms").
-reads_the_word("tools.go", "breaks").
-reads_the_word("tools.go", "never_fired").
+reads("engine.go", "Reader loads File").
+reads("engine.go", "Command uses Tool Input").
+reads("engine.go", "Folder conforms Answer").
+reads("engine.go", "Answer exits with Code").
+reads("engine.go", "Printer prints Pattern").
+reads("engine.go", "Printer prints in Language").
+reads("engine.go", "Printer prints to Place").
+reads("tools.go", "Folder conforms Answer").
+reads("tools.go", "Thing breaks Law").
+reads("tools.go", "Rule is never fired").
 
-supplies_the_word("tools.go", "returned").
-supplies_the_word("engine.go", "the_kind_of_this_run").
-supplies_the_word("engine.go", "a_problem").
-supplies_the_word("workflow.mg", "in_the_folder").
-supplies_the_word("workflow.mg", "has_the_comment").
-supplies_the_word("workflow.mg", "has_lines").
-supplies_the_word("workflow.mg", "is_in").
-supplies_the_word("workflow.mg", "defines").
-supplies_the_word("workflow.mg", "refers_to").
-supplies_the_word("workflow.mg", "lays_down").
-supplies_the_word("workflow.mg", "broke").
-supplies_the_word("workflow.mg", "answered").
-supplies_the_word("workflow.mg", "never_fired").
+writes("tools.go", "Command returned Field Value").
+writes("engine.go", "Kind is the kind of this run").
+writes("engine.go", "Text is a problem").
+writes("workflow.mg", "File is in the folder").
+writes("workflow.mg", "File has the comment Text").
+writes("workflow.mg", "File has lines Count").
+writes("workflow.mg", "Rule is in File").
+writes("workflow.mg", "Rule defines Word").
+writes("workflow.mg", "Rule refers to Word").
+writes("workflow.mg", "Rule lays down Law").
+writes("workflow.mg", "Change broke Law").
+writes("workflow.mg", "Change answered Answer").
+writes("workflow.mg", "Rule is never fired").
+writes("workflow.mg", "Pattern names Word").
 
 Decl uses(Command, Tool, Input).
 Decl returned(Command, Field, Value).
@@ -46,6 +47,7 @@ Decl lays_down(Rule, Law).
 Decl broke(Change, Law).
 Decl answered(Change, Answer).
 Decl never_fired(Rule).
+Decl names(Pattern, Word).
 
 returns("list", "file").
 returns("count lines", "lines").
@@ -58,6 +60,7 @@ returns("see what fired", "rule that fired").
 returns("try", "conforms").
 returns("try", "broke").
 returns("try", "never fired").
+returns("read a pattern", "word it names").
 
 in_the_catalog(Tool) :- returns(Tool, _).
 named_as_a_command(Command) :- uses(Command, _, _), :string:starts_with(Command, "command: ").
@@ -86,13 +89,13 @@ must_break("a missing workflow", "Every file engine.go loads is in the folder").
 
 has_a_rule_for(File, Word) :- is_in(Rule, File), defines(Rule, Word).
 
-breaks(File, "Each word has one supplier") :- has_a_rule_for(File, Word), supplies_the_word(Supplier, Word), Supplier != File.
+breaks(File, "Each word has one writer") :- has_a_rule_for(File, Word), names(Pattern, Word), writes(Writer, Pattern), Writer != File.
 
 adds_line("a workflow that fakes what the tools returned", "workflow.mg", 'returned("command: a fake", "file", "nowhere").').
-must_break("a workflow that fakes what the tools returned", "Each word has one supplier").
+must_break("a workflow that fakes what the tools returned", "Each word has one writer").
 
 adds_line("a spec that looks for itself", "spec.mg", 'in_the_folder("ghost.txt").').
-must_break("a spec that looks for itself", "Each word has one supplier").
+must_break("a spec that looks for itself", "Each word has one writer").
 
 means(".mg", "mangle").
 means(".go", "go").
@@ -136,12 +139,12 @@ adds_line("a change that expects an unknown law", "workflow.mg", 'must_break("a 
 must_break("a change that expects an unknown law", "Every change comes out as stated").
 
 a_word(Word) :- has_a_rule_for("spec.mg", Word).
-a_word(Word) :- supplies_the_word(_, Word).
+a_word(Word) :- writes(_, Pattern), names(Pattern, Word).
 rests_on(Word, Other) :- defines(Rule, Word), refers_to(Rule, Other), Word != "breaks".
 rests_on(Law, Other) :- lays_down(Rule, Law), refers_to(Rule, Other).
 rests_on("breaks", Law) :- a_law(Law).
-rests_on("prints", Word) :- prints(_, Word).
-used(Word) :- reads_the_word(_, Word).
+rests_on("prints", Word) :- prints(_, Pattern), names(Pattern, Word).
+used(Word) :- reads(_, Pattern), names(Pattern, Word).
 used(Other) :- rests_on(Word, Other), used(Word).
 
 breaks(Word, "Every word is used") :- a_word(Word), !used(Word).
@@ -161,20 +164,20 @@ must_answer("a spec that cannot load", "broken").
 
 prints_in("engine.go", "mangle").
 prints_to("engine.go", "standard output").
-prints("engine.go", "conforms").
-prints("engine.go", "breaks").
-prints("engine.go", "broke").
-prints("engine.go", "answered").
-prints("engine.go", "never_fired").
-prints("engine.go", "has_lines").
-prints("engine.go", "a_problem").
-prints("engine.go", "a_concept").
-prints("engine.go", "is_made_of").
-prints("engine.go", "is_tested_by").
-prints("engine.go", "defines").
-prints("engine.go", "refers_to").
-prints("engine.go", "is_in").
-prints("engine.go", "rests_on").
+prints("engine.go", "Folder conforms Answer").
+prints("engine.go", "Thing breaks Law").
+prints("engine.go", "Change broke Law").
+prints("engine.go", "Change answered Answer").
+prints("engine.go", "Rule is never fired").
+prints("engine.go", "File has lines Count").
+prints("engine.go", "Text is a problem").
+prints("engine.go", "Concept is a concept").
+prints("engine.go", "Concept is made of Rule").
+prints("engine.go", "Concept is tested by Change").
+prints("engine.go", "Rule defines Word").
+prints("engine.go", "Rule refers to Word").
+prints("engine.go", "Rule is in File").
+prints("engine.go", "Word rests on Other").
 
 a_concept("The folder conforms to the spec").
 a_concept(Law) :- a_law(Law).
