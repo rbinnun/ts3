@@ -6,16 +6,15 @@ part_of_the_machine("runme.sh").
 part_of_the_machine("go.mod").
 part_of_the_machine("go.sum").
 
-reads("engine.go", "Reader loads File").
-reads("engine.go", "Command uses Tool Input").
-reads("engine.go", "Folder conforms Answer").
-reads("engine.go", "Answer exits with Code").
-reads("engine.go", "Printer prints Pattern").
-reads("engine.go", "Printer prints in Language").
-reads("engine.go", "Printer prints to Place").
-reads("tools.go", "Folder conforms Answer").
-reads("tools.go", "Thing breaks Law").
-reads("tools.go", "Rule is never fired").
+acts_on("engine.go", "Reader loads File").
+acts_on("engine.go", "Command uses Tool Input").
+acts_on("engine.go", "Folder conforms Answer").
+acts_on("engine.go", "Answer exits with Code").
+acts_on("engine.go", "Printer prints Pattern").
+acts_on("engine.go", "Printer prints in Language").
+acts_on("engine.go", "Printer prints to Place").
+acts_on("tools.go", "Tool runs File").
+acts_on("tools.go", "Tool reads Place").
 
 writes("tools.go", "Command returned Field Value").
 writes("engine.go", "Kind is the kind of this run").
@@ -56,7 +55,9 @@ returns("read a rule", "word it defines").
 returns("read a rule", "law it lays down").
 returns("read a rule", "word it refers to").
 returns("see what fired", "rule that fired").
-returns("try", "conforms").
+runs("try", "runme.sh").
+reads("try", "standard output").
+returns("try", "exit code").
 returns("try", "broke").
 returns("try", "never fired").
 returns("read a pattern", "word it names").
@@ -143,7 +144,7 @@ rests_on(Word, Other) :- defines(Rule, Word), refers_to(Rule, Other), Word != "b
 rests_on(Law, Other) :- lays_down(Rule, Law), refers_to(Rule, Other).
 rests_on("breaks", Law) :- a_law(Law).
 rests_on("prints", Word) :- prints(Anyone, Pattern), names(Pattern, Word).
-used(Word) :- reads(Anyone, Pattern), names(Pattern, Word).
+used(Word) :- acts_on(Anyone, Pattern), names(Pattern, Word).
 used(Other) :- rests_on(Word, Other), used(Word).
 
 breaks(Word, "Every word is used") :- a_word(Word), !used(Word).
