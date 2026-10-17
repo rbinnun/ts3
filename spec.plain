@@ -22,18 +22,18 @@ tools.go, creates fact, [command] returned [field] [value]
 engine.go, creates fact, [kind] is the kind of this run
 engine.go, creates fact, [text] is a problem
 engine.go, creates fact, [line] is misread
+engine.go, creates fact, [rule] is in [file]
+engine.go, creates fact, [rule] defines [word]
+engine.go, creates fact, [rule] refers to [word]
+engine.go, creates fact, [rule] lays down [law]
+engine.go, creates fact, [fact pattern] names [word]
 workflow.plain, creates fact, [command] uses [tool] [input]
 workflow.plain, creates fact, [file] is in the folder
 workflow.plain, creates fact, [file] has the comment [text]
 workflow.plain, creates fact, [file] has lines [count]
-workflow.plain, creates fact, [rule] is in [file]
-workflow.plain, creates fact, [rule] defines [word]
-workflow.plain, creates fact, [rule] refers to [word]
-workflow.plain, creates fact, [rule] lays down [law]
 workflow.plain, creates fact, [change] broke [law]
 workflow.plain, creates fact, [change] answered [answer]
 workflow.plain, creates fact, [rule] is never fired
-workflow.plain, creates fact, [fact pattern] names [word]
 
 list, returns, file
 count lines, returns, lines
@@ -41,17 +41,12 @@ find go comments, returns, comment
 find sh comments, returns, comment
 find go comments, finds comments in, go
 find sh comments, finds comments in, sh
-parse, returns, rule
-read a rule, returns, word it defines
-read a rule, returns, law it lays down
-read a rule, returns, word it refers to
 see what fired, returns, rule that fired
 try, runs, runme.sh
 try, reads, standard output
 try, returns, exit code
 try, returns, broke
 try, returns, never fired
-read a fact pattern, returns, word it names
 
 [tool], is, in the catalog
     if [tool], returns, [anything]
@@ -134,6 +129,9 @@ a law is broken, means in mangle, a_law_is_broken().
 
 a line that reads back differently, adds line, spec.plain, '"zzz", means, nothing'
 a line that reads back differently, must break, Every line reads back as written
+
+a hand-written declaration, adds line, spec.plain, "declared: [line], is, misread"
+a hand-written declaration, must break, Every line reads back as written
 
 .plain, means, plain language
 .go, means, go
