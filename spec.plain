@@ -10,9 +10,13 @@ engine.go, executes instruction, [go file] loads [plain file]
 engine.go, executes instruction, [plain] means in mangle [mangle]
 engine.go, executes instruction, [command] uses [tool] [input]
 engine.go, executes instruction, [answer] exits with [code]
-engine.go, executes instruction, [go file] prints [fact pattern]
+engine.go, executes instruction, [folder] conforms [answer]
+engine.go, executes instruction, [text] is a problem
+engine.go, executes instruction, [go file] prints [view]
 engine.go, executes instruction, [go file] prints in [language]
 engine.go, executes instruction, [go file] prints to [place]
+engine.go, executes instruction, [view] unrolls [fact pattern]
+engine.go, executes instruction, [view] shows [fact pattern]
 tools.go, executes instruction, [tool] runs [file]
 tools.go, executes instruction, [tool] reads [place]
 tools.go, executes instruction, [change] adds line [file] [line]
@@ -30,23 +34,18 @@ engine.go, creates fact, [fact pattern] names [word]
 workflow.plain, creates fact, [command] uses [tool] [input]
 workflow.plain, creates fact, [file] is in the folder
 workflow.plain, creates fact, [file] has the comment [text]
-workflow.plain, creates fact, [file] has lines [count]
 workflow.plain, creates fact, [change] broke [law]
 workflow.plain, creates fact, [change] answered [answer]
-workflow.plain, creates fact, [rule] is never fired
 
 list, returns, file
-count lines, returns, lines
 find go comments, returns, comment
 find sh comments, returns, comment
 find go comments, finds comments in, go
 find sh comments, finds comments in, sh
-see what fired, returns, rule that fired
 try, runs, runme.sh
 try, reads, standard output
 try, returns, exit code
 try, returns, broke
-try, returns, never fired
 
 [tool], is, in the catalog
     if [tool], returns, [anything]
@@ -73,7 +72,7 @@ a command not named as a command, must break, Every command is named as a comman
     and not [tool], returns, [field]
 
 a command with two tools, adds line, workflow.plain, "command: a mix-up, uses, list, the folder"
-a command with two tools, adds line, workflow.plain, "command: a mix-up, uses, count lines, spec.plain"
+a command with two tools, adds line, workflow.plain, "command: a mix-up, uses, find go comments, tools.go"
 a command with two tools, must break, Every tool returns only what the catalog lists
 
 [file], is, used
@@ -122,7 +121,7 @@ a law is broken, means in mangle, a_law_is_broken().
 "[file], ends with, [ending]", means in mangle, ":string:ends_with(File, Ending)"
 "[command], starts with, [prefix]", means in mangle, ":string:starts_with(Command, Prefix)"
 "[file], differs from, [other file]", means in mangle, File != OtherFile
-'[command], is the join of, "command: count the lines of ", [file]', means in mangle, 'Command = fn:string:concat("command: count the lines of ", File)'
+'[command], is the join of, "command: find the comments in ", [file]', means in mangle, 'Command = fn:string:concat("command: find the comments in ", File)'
 
 [line], breaks, Every line reads back as written
     if [line], is, misread
@@ -213,9 +212,6 @@ a change that expects an unknown law, must break, Every change comes out as stat
     and [rule], refers to, [other]
 breaks, rests on, [law]
     if [law], is, a law
-prints, rests on, [word]
-    if [anyone], prints, [fact pattern]
-    and [fact pattern], names, [word]
 [word], is, used
     if [anyone], executes instruction, [fact pattern]
     and [fact pattern], names, [word]
@@ -243,32 +239,13 @@ broken, exits with, 2
 a spec that cannot load, adds line, spec.plain, "a, b"
 a spec that cannot load, must answer, broken
 
+engine.go, prints, the knowledge view
 engine.go, prints in, plain language
 engine.go, prints to, standard output
-engine.go, prints, [folder] conforms [answer]
-engine.go, prints, [thing] breaks [law]
-engine.go, prints, [change] broke [law]
-engine.go, prints, [change] answered [answer]
-engine.go, prints, [rule] is never fired
-engine.go, prints, [file] has lines [count]
-engine.go, prints, [text] is a problem
-engine.go, prints, [line] is misread
-engine.go, prints, [concept] is a concept
-engine.go, prints, [concept] is made of [rule]
-engine.go, prints, [concept] is tested by [change]
-engine.go, prints, [rule] defines [word]
-engine.go, prints, [rule] refers to [word]
-engine.go, prints, [rule] is in [file]
-engine.go, prints, [word] rests on [other word]
-
-The folder conforms to the spec, is, a concept
-[law], is, a concept
-    if [law], is, a law
-The folder conforms to the spec, is made of, [rule]
-    if [rule], defines, conforms
-[law], is made of, [rule]
-    if [rule], lays down, [law]
-The folder conforms to the spec, is tested by, [change]
-    if [change], must answer, [any answer]
-[law], is tested by, [change]
-    if [change], must break, [law]
+the knowledge view, unrolls, [folder] conforms [answer]
+the knowledge view, shows, [folder] conforms [answer]
+the knowledge view, shows, [thing] breaks [law]
+the knowledge view, shows, [change] broke [law]
+the knowledge view, shows, [change] answered [answer]
+the knowledge view, shows, [text] is a problem
+the knowledge view, shows, [line] is misread
