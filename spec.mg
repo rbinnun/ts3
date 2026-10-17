@@ -73,6 +73,11 @@ must_break("a command with a tool nobody has", "Every command uses a tool in the
 adds_line("a command not named as a command", "workflow.mg", 'uses("list it", "list", "the folder").').
 must_break("a command not named as a command", "Every command is named as a command").
 
+breaks(Command, "Every tool returns only what the catalog lists") :- returned(Command, Field, AnyValue), uses(Command, Tool, AnyInput), !returns(Tool, Field).
+
+adds_line("a command with two tools", "workflow.mg", 'uses("command: a mix-up", "list", "the folder"). uses("command: a mix-up", "count lines", "spec.mg").').
+must_break("a command with two tools", "Every tool returns only what the catalog lists").
+
 used(File) :- loads(Anyone, File).
 used(File) :- part_of_the_machine(File).
 
