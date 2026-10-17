@@ -30,15 +30,12 @@ type tool struct {
 }
 
 var toolbox = map[string]tool{
-	"list":                {run: list},
-	"count lines":         {run: countLines},
-	"find go comments":    {run: findGoComments},
-	"find sh comments":    {run: findShComments},
-	"parse":               {run: parseRules},
-	"read a rule":         {run: readRule},
-	"see what fired":      {live: true, run: seeWhatFired},
-	"try":                 {run: try},
-	"read a fact pattern": {run: readPattern},
+	"list":             {run: list},
+	"count lines":      {run: countLines},
+	"find go comments": {run: findGoComments},
+	"find sh comments": {run: findShComments},
+	"see what fired":   {live: true, run: seeWhatFired},
+	"try":              {run: try},
 }
 
 func says(field string, value ast.Constant) finding {
@@ -140,61 +137,6 @@ func findShComments(r *run, name, file string) []finding {
 	return found
 }
 
-func rulesOf(file string) []*rule {
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return nil
-	}
-	var rules []*rule
-	for _, rl := range readPlain(file, string(data)).rules {
-		if !rl.declared {
-			rules = append(rules, rl)
-		}
-	}
-	return rules
-}
-
-func parseRules(r *run, name, file string) []finding {
-	var found []finding
-	for _, rl := range rulesOf(file) {
-		found = append(found, says("rule", ast.String(rl.id)))
-	}
-	return found
-}
-
-func readRule(r *run, name, id string) []finding {
-	cut := strings.LastIndex(id, ":")
-	if cut < 0 {
-		return nil
-	}
-	for _, rl := range rulesOf(id[:cut]) {
-		if rl.id != id {
-			continue
-		}
-		found := []finding{says("word it defines", ast.String(wordOf(rl.head.name)))}
-		if law, ok := rl.law(); ok {
-			found = append(found, says("law it lays down", ast.String(law)))
-		}
-		seen := map[string]bool{}
-		for _, p := range rl.body {
-			if p.shape == relationShape && !seen[p.name] {
-				seen[p.name] = true
-				found = append(found, says("word it refers to", ast.String(wordOf(p.name))))
-			}
-		}
-		return found
-	}
-	return nil
-}
-
-func (rl *rule) law() (string, bool) {
-	h := rl.head
-	if h.name != nameOf("breaks") || len(h.args) != 2 || !h.args[1].isText() {
-		return "", false
-	}
-	return h.args[1].text, true
-}
-
 func seeWhatFired(r *run, name, input string) []finding {
 	var ids []string
 	for id := range r.fired {
@@ -206,18 +148,6 @@ func seeWhatFired(r *run, name, input string) []finding {
 		found = append(found, says("rule that fired", ast.String(id)))
 	}
 	return found
-}
-
-func readPattern(r *run, name, pattern string) []finding {
-	line, ok := patternLine(pattern)
-	if !ok {
-		return nil
-	}
-	p, err := readPremise(line)
-	if err != nil || p.shape != relationShape {
-		return nil
-	}
-	return []finding{says("word it names", ast.String(wordOf(p.name)))}
 }
 
 func try(r *run, name, change string) []finding {

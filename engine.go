@@ -18,14 +18,13 @@ import (
 )
 
 const (
-	self           = "engine.go"
-	kindOfRun      = "KIND_OF_RUN"
-	declaredPrefix = "declared: "
-	plainLanguage  = "plain language"
-	standardError  = "standard error"
-	broken         = "broken"
-	troubleCode    = 2
-	settleLimit    = 64
+	self          = "engine.go"
+	kindOfRun     = "KIND_OF_RUN"
+	plainLanguage = "plain language"
+	standardError = "standard error"
+	broken        = "broken"
+	troubleCode   = 2
+	settleLimit   = 64
 )
 
 var (
@@ -35,6 +34,7 @@ var (
 	mangleEscapes = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\t", `\t`)
 	tests         = map[string]string{"starts with": ":string:starts_with", "ends with": ":string:ends_with"}
 	testWords     = map[string]string{":string:starts_with": "starts with", ":string:ends_with": "ends with"}
+	patternVerbs  = []string{"creates fact", "executes instruction", "prints"}
 	readings      sync.Map
 )
 
@@ -65,12 +65,12 @@ type premise struct {
 }
 
 type rule struct {
-	id       string
-	declared bool
-	head     premise
-	body     []premise
-	clause   ast.Clause
-	text     string
+	id     string
+	file   string
+	head   premise
+	body   []premise
+	clause ast.Clause
+	text   string
 }
 
 type reading struct {
@@ -86,7 +86,6 @@ type command struct {
 type run struct {
 	kind     string
 	rules    []*rule
-	decls    []*rule
 	problems []string
 	misread  []string
 	info     *analysis.ProgramInfo
@@ -144,10 +143,6 @@ func (r *run) load(start string) {
 		}
 		r.misread = append(r.misread, read.misread...)
 		for _, rl := range read.rules {
-			if rl.declared {
-				r.decls = append(r.decls, rl)
-				continue
-			}
 			r.rules = append(r.rules, rl)
 			if target, ok := loadTarget(rl); ok {
 				queue = append(queue, target)
@@ -184,9 +179,7 @@ func (r *run) check() {
 
 func (r *run) build() {
 	var b strings.Builder
-	for _, d := range r.decls {
-		b.WriteString(d.text + "\n")
-	}
+	b.WriteString(r.declarations())
 	r.helpers = map[string]string{}
 	r.order = map[string]int{}
 	for i, rl := range r.rules {
@@ -212,6 +205,32 @@ func (r *run) build() {
 	r.info = info
 }
 
+func (r *run) declarations() string {
+	var b strings.Builder
+	seen := map[string]bool{}
+	for _, rl := range r.rules {
+		h := rl.head
+		if len(rl.body) > 0 || h.name != nameOf("creates fact") || len(h.args) != 2 || !h.args[1].isText() {
+			continue
+		}
+		p, ok := patternOf(h.args[1].text)
+		if !ok {
+			continue
+		}
+		key := p.name + "/" + strconv.Itoa(len(p.args))
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		vars := make([]string, len(p.args))
+		for i := range vars {
+			vars[i] = "A" + strconv.Itoa(i)
+		}
+		fmt.Fprintf(&b, "Decl %s(%s).\n", p.name, strings.Join(vars, ", "))
+	}
+	return b.String()
+}
+
 func (r *run) evaluate() {
 	if r.info == nil {
 		r.model = r.factsOnly()
@@ -228,7 +247,7 @@ func (r *run) evaluate() {
 		}
 		r.fired = r.firedRules()
 		var fresh []command
-		var nextLive []ast.Atom
+		nextLive := r.namings()
 		for _, c := range r.commands() {
 			t, known := toolbox[c.tool]
 			switch {
@@ -258,6 +277,55 @@ func (r *run) engineFacts() []ast.Atom {
 	}
 	for _, m := range r.misread {
 		facts = append(facts, property(m, "misread"))
+	}
+	for _, rl := range r.rules {
+		facts = append(facts, rl.facts()...)
+	}
+	return facts
+}
+
+func (rl *rule) facts() []ast.Atom {
+	id := ast.String(rl.id)
+	facts := []ast.Atom{
+		relation("is in", id, ast.String(rl.file)),
+		relation("defines", id, ast.String(wordOf(rl.head.name))),
+	}
+	if law, ok := rl.law(); ok {
+		facts = append(facts, relation("lays down", id, ast.String(law)))
+	}
+	seen := map[string]bool{}
+	for _, p := range rl.body {
+		if p.shape == relationShape && !seen[p.name] {
+			seen[p.name] = true
+			facts = append(facts, relation("refers to", id, ast.String(wordOf(p.name))))
+		}
+	}
+	return facts
+}
+
+func (rl *rule) law() (string, bool) {
+	h := rl.head
+	if h.name != nameOf("breaks") || len(h.args) != 2 || !h.args[1].isText() {
+		return "", false
+	}
+	return h.args[1].text, true
+}
+
+func (r *run) namings() []ast.Atom {
+	var facts []ast.Atom
+	seen := map[string]bool{}
+	for _, verb := range patternVerbs {
+		r.model.GetFacts(ast.NewQuery(ast.PredicateSym{Symbol: nameOf(verb), Arity: 2}), func(a ast.Atom) error {
+			c, ok := a.Args[1].(ast.Constant)
+			if !ok || c.Type != ast.StringType || seen[c.Symbol] {
+				return nil
+			}
+			seen[c.Symbol] = true
+			if p, ok := patternOf(c.Symbol); ok {
+				facts = append(facts, relation("names", c, ast.String(wordOf(p.name))))
+			}
+			return nil
+		})
 	}
 	return facts
 }
@@ -420,12 +488,8 @@ func (r *run) print() {
 	}
 	first := true
 	for _, a := range patterns {
-		line, ok := patternLine(textOf(a.Args[1]))
+		p, ok := patternOf(textOf(a.Args[1]))
 		if !ok {
-			continue
-		}
-		p, err := readPremise(line)
-		if err != nil || p.shape != relationShape {
 			continue
 		}
 		var lines []string
@@ -576,18 +640,10 @@ func readPlain(file, data string) *reading {
 }
 
 func (read *reading) add(file string, lines []string, group []int) {
-	rl := &rule{id: place(file, group[0]+1)}
-	headLine := lines[group[0]]
-	if rest, ok := strings.CutPrefix(headLine, declaredPrefix); ok {
-		rl.declared = true
-		headLine = rest
-	}
-	head, err := readPremise(headLine)
+	rl := &rule{id: place(file, group[0]+1), file: file}
+	head, err := readPremise(lines[group[0]])
 	if err == nil && head.shape != relationShape {
 		err = fmt.Errorf("it is a test, not a sentence")
-	}
-	if err == nil && rl.declared && len(group) > 1 {
-		err = fmt.Errorf("a declaration has no conditions")
 	}
 	if err != nil {
 		read.problems = append(read.problems, rl.id+" cannot be read: "+err.Error())
@@ -617,16 +673,6 @@ func (read *reading) add(file string, lines []string, group []int) {
 }
 
 func (rl *rule) readBack() ([]string, error) {
-	if rl.declared {
-		unit, err := parse.Unit(strings.NewReader(rl.text))
-		if err != nil {
-			return nil, err
-		}
-		if len(unit.Decls) == 0 {
-			return nil, fmt.Errorf("no declaration in %s", rl.text)
-		}
-		return []string{declaredPrefix + plainOfAtom(unit.Decls[len(unit.Decls)-1].DeclaredAtom)}, nil
-	}
 	clause, err := parse.Clause(rl.text)
 	if err != nil {
 		return nil, err
@@ -648,9 +694,6 @@ func (rl *rule) readBack() ([]string, error) {
 }
 
 func (rl *rule) mangle() string {
-	if rl.declared {
-		return "Decl " + rl.head.mangle() + "."
-	}
 	if len(rl.body) == 0 {
 		return rl.head.mangle() + "."
 	}
@@ -683,16 +726,6 @@ func readCondition(line string) (premise, error) {
 }
 
 func translate(line string) (string, error) {
-	if rest, ok := strings.CutPrefix(line, declaredPrefix); ok {
-		p, err := readPremise(rest)
-		if err != nil {
-			return "", err
-		}
-		if p.shape != relationShape {
-			return "", fmt.Errorf("only sentences are declared")
-		}
-		return "Decl " + p.mangle() + ".", nil
-	}
 	p, err := readPremise(line)
 	if err != nil {
 		return "", err
@@ -928,6 +961,18 @@ func quoted(s string) string {
 		return `'` + s + `'`
 	}
 	return `"` + s + `"`
+}
+
+func patternOf(pattern string) (premise, bool) {
+	line, ok := patternLine(pattern)
+	if !ok {
+		return premise{}, false
+	}
+	p, err := readPremise(line)
+	if err != nil || p.shape != relationShape {
+		return premise{}, false
+	}
+	return p, true
 }
 
 func patternLine(pattern string) (string, bool) {

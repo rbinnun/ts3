@@ -1,7 +1,3 @@
-declared: [command], returned, [field], [value]
-declared: [kind], is, the kind of this run
-declared: [line], is, misread
-
 command: list the folder, uses, list, the folder
 
 [file], is, in the folder
@@ -25,46 +21,6 @@ command: list the folder, uses, list, the folder
     if [command], uses, [tool], [file]
     and [tool], finds comments in, [any language]
     and [command], returned, comment, [text]
-
-[command], uses, parse, [file]
-    if [anyone], loads, [file]
-    and [file], is, in the folder
-    and [command], is the join of, "command: parse ", [file]
-
-[rule], is in, [file]
-    if [command], uses, parse, [file]
-    and [command], returned, rule, [rule]
-
-[command], uses, read a rule, [rule]
-    if [rule], is in, [any file]
-    and [command], is the join of, "command: read the rule ", [rule]
-
-[rule], defines, [word]
-    if [command], uses, read a rule, [rule]
-    and [command], returned, word it defines, [word]
-
-[rule], refers to, [word]
-    if [command], uses, read a rule, [rule]
-    and [command], returned, word it refers to, [word]
-
-[rule], lays down, [law]
-    if [command], uses, read a rule, [rule]
-    and [command], returned, law it lays down, [law]
-
-[pattern], is, a pattern
-    if [anyone], creates fact, [pattern]
-[pattern], is, a pattern
-    if [anyone], executes instruction, [pattern]
-[pattern], is, a pattern
-    if [anyone], prints, [pattern]
-
-[command], uses, read a fact pattern, [pattern]
-    if [pattern], is, a pattern
-    and [command], is the join of, "command: read the pattern ", [pattern]
-
-[pattern], names, [word]
-    if [command], uses, read a fact pattern, [pattern]
-    and [command], returned, word it names, [word]
 
 [command], uses, try, [change]
     if [change], is, a change
