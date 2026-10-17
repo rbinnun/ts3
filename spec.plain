@@ -18,11 +18,11 @@ engine.go, executes instruction, [go file] prints to [place]
 engine.go, executes instruction, [rule] is in the knowledge view
 engine.go, executes instruction, [view] shows [fact pattern]
 engine.go, executes instruction, [view] gives reasons for [fact pattern]
+engine.go, executes instruction, [file] creates fact [fact pattern]
 tools.go, executes instruction, [tool] runs [file]
 tools.go, executes instruction, [tool] reads [place]
 tools.go, executes instruction, [change] adds line [file] [line]
 tools.go, executes instruction, [fact] holds because [reason]
-engine.go, executes instruction, [file] creates fact [fact pattern]
 
 tools.go, creates fact, [command] returned [field] [value]
 engine.go, creates fact, this run is a change
@@ -36,10 +36,7 @@ engine.go, creates fact, [fact pattern] names [predicate]
 engine.go, creates fact, [fact] holds because [reason]
 workflow.plain, creates fact, [command] uses [tool] [input]
 workflow.plain, creates fact, [file] is in the folder
-workflow.plain, creates fact, [file] has the comment [text]
-workflow.plain, creates fact, [change] broke [law]
-workflow.plain, creates fact, [change] answered [answer]
-workflow.plain, creates fact, [change] explains [line]
+workflow.plain, creates fact, [file] has the comment [comment]
 
 list, returns, file
 find go comments, returns, comment
@@ -53,7 +50,7 @@ try, returns, broke
 try, returns, why
 
 [tool], is, in the catalog
-    if [tool], returns, [anything]
+    if [tool], returns, [any field]
 [command], is, named as a command
     if [command], uses, [any tool], [any input]
     and [command], starts with, "command: "
@@ -81,7 +78,7 @@ a command with two tools, adds line, workflow.plain, "command: a mix-up, uses, f
 a command with two tools, must break, Every tool returns only what the catalog lists
 
 [file], is, a used file
-    if [anyone], loads, [file]
+    if [any file], loads, [file]
 [file], is, a used file
     if [file], is, part of the machine
 
@@ -99,11 +96,16 @@ a file nobody uses, must break, Every file is used
 a missing workflow, adds line, spec.plain, "engine.go, loads, missing.plain"
 a missing workflow, must break, Every file engine.go loads is in the folder
 
-[file], breaks, Each predicate has one creator
+[file], is a creator of, [predicate]
     if [file], has a rule for, [predicate]
+[file], is a creator of, [predicate]
+    if [file], creates fact, [fact pattern]
     and [fact pattern], names, [predicate]
-    and [creator], creates fact, [fact pattern]
-    and [creator], differs from, [file]
+
+[file], breaks, Each predicate has one creator
+    if [file], is a creator of, [predicate]
+    and [other file], is a creator of, [predicate]
+    and [other file], differs from, [file]
 
 a workflow that fakes what the tools returned, adds line, workflow.plain, "command: a fake, returned, file, nowhere"
 a workflow that fakes what the tools returned, must break, Each predicate has one creator
@@ -111,11 +113,12 @@ a workflow that fakes what the tools returned, must break, Each predicate has on
 a spec that looks for itself, adds line, spec.plain, "ghost.txt, is, in the folder"
 a spec that looks for itself, must break, Each predicate has one creator
 
+a workflow that makes up a result, adds line, workflow.plain, "a comment, broke, The only knowledge is Datalog"
+a workflow that makes up a result, must break, Each predicate has one creator
+
 "engine.go, loads, spec.plain", means in mangle, 'loads("engine.go", "spec.plain").'
 "spec.plain, is, in the folder", means in mangle, in_the_folder("spec.plain").
 a law is broken, means in mangle, a_law_is_broken().
-"command: list the folder, uses, list, the folder", means in mangle, 'uses("command: list the folder", "list", "the folder").'
-"[file], is, a used file", means in mangle, a_used_file(File).
 "[any file], is, a used file", means in mangle, a_used_file(AnyFile).
 "true, exits with, 0", means in mangle, 'exits_with("true", 0).'
 'a change, adds line, notes.plain, "a, is, a note"', means in mangle, 'adds_line("a change", "notes.plain", "a, is, a note").'
@@ -129,9 +132,6 @@ a law is broken, means in mangle, a_law_is_broken().
 
 a line that reads back differently, adds line, spec.plain, '"zzz", means, nothing'
 a line that reads back differently, must break, Every line reads back as written
-
-a hand-written declaration, adds line, spec.plain, "declared: [line], is, misread"
-a hand-written declaration, must break, Every line reads back as written
 
 .plain, means, plain language
 .go, means, go
@@ -160,6 +160,16 @@ a comment, must break, The only knowledge is Datalog
 
 [change], is, a change
     if [change], adds line, [any file], [any line]
+[change], broke, [law]
+    if [command], uses, try, [change]
+    and [command], returned, broke, [law]
+[change], answered, [answer]
+    if [command], uses, try, [change]
+    and [command], returned, exit code, [code]
+    and [answer], exits with, [code]
+[change], explains, [line]
+    if [command], uses, try, [change]
+    and [command], returned, why, [line]
 [law], is, a law
     if [any rule], lays down, [law]
 [law], is, proven
@@ -191,18 +201,15 @@ a change that expects an unknown law, adds line, workflow.plain, "a ghost change
 a change that expects an unknown law, must break, Every change comes out as stated
 
 [predicate], is, a predicate
-    if spec.plain, has a rule for, [predicate]
-[predicate], is, a predicate
-    if [anyone], creates fact, [fact pattern]
-    and [fact pattern], names, [predicate]
-[predicate], rests on, [other]
+    if [any file], is a creator of, [predicate]
+[predicate], rests on, [other predicate]
     if [rule], defines, [predicate]
-    and [rule], refers to, [other]
+    and [rule], refers to, [other predicate]
 [predicate], is, a used predicate
-    if [anyone], executes instruction, [fact pattern]
+    if [any file], executes instruction, [fact pattern]
     and [fact pattern], names, [predicate]
-[other], is, a used predicate
-    if [predicate], rests on, [other]
+[other predicate], is, a used predicate
+    if [predicate], rests on, [other predicate]
     and [predicate], is, a used predicate
 
 [predicate], breaks, Every predicate is used
@@ -213,7 +220,7 @@ a predicate nobody uses, adds line, spec.plain, "a, is, lonely"
 a predicate nobody uses, must break, Every predicate is used
 
 a law is broken
-    if [anything], breaks, [any law]
+    if [any thing], breaks, [any law]
 the folder, conforms, false
     if a law is broken
 the folder, conforms, true
