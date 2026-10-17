@@ -6,14 +6,14 @@ part_of_the_machine("runme.sh").
 part_of_the_machine("go.mod").
 part_of_the_machine("go.sum").
 
-executes("engine.go", "[go file] loads [mangle file]").
-executes("engine.go", "[command] uses [tool] [input]").
-executes("engine.go", "[answer] exits with [code]").
-executes("engine.go", "[go file] prints [pattern]").
-executes("engine.go", "[go file] prints in [language]").
-executes("engine.go", "[go file] prints to [place]").
-executes("tools.go", "[tool] runs [file]").
-executes("tools.go", "[tool] reads [place]").
+executes_instruction("engine.go", "[go file] loads [mangle file]").
+executes_instruction("engine.go", "[command] uses [tool] [input]").
+executes_instruction("engine.go", "[answer] exits with [code]").
+executes_instruction("engine.go", "[go file] prints [pattern]").
+executes_instruction("engine.go", "[go file] prints in [language]").
+executes_instruction("engine.go", "[go file] prints to [place]").
+executes_instruction("tools.go", "[tool] runs [file]").
+executes_instruction("tools.go", "[tool] reads [place]").
 
 writes_fact("tools.go", "[command] returned [field] [value]").
 writes_fact("engine.go", "[kind] is the kind of this run").
@@ -143,7 +143,7 @@ rests_on(Word, Other) :- defines(Rule, Word), refers_to(Rule, Other), Word != "b
 rests_on(Law, Other) :- lays_down(Rule, Law), refers_to(Rule, Other).
 rests_on("breaks", Law) :- a_law(Law).
 rests_on("prints", Word) :- prints(Anyone, Pattern), names(Pattern, Word).
-used(Word) :- executes(Anyone, Pattern), names(Pattern, Word).
+used(Word) :- executes_instruction(Anyone, Pattern), names(Pattern, Word).
 used(Other) :- rests_on(Word, Other), used(Word).
 
 breaks(Word, "Every word is used") :- a_word(Word), !used(Word).
