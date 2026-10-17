@@ -6,15 +6,14 @@ part_of_the_machine("runme.sh").
 part_of_the_machine("go.mod").
 part_of_the_machine("go.sum").
 
-acts_on("engine.go", "Reader loads File").
-acts_on("engine.go", "Command uses Tool Input").
-acts_on("engine.go", "Folder conforms Answer").
-acts_on("engine.go", "Answer exits with Code").
-acts_on("engine.go", "Printer prints Pattern").
-acts_on("engine.go", "Printer prints in Language").
-acts_on("engine.go", "Printer prints to Place").
-acts_on("tools.go", "Tool runs File").
-acts_on("tools.go", "Tool reads Place").
+implements("engine.go", "Reader loads File").
+implements("engine.go", "Command uses Tool Input").
+implements("engine.go", "Answer exits with Code").
+implements("engine.go", "Printer prints Pattern").
+implements("engine.go", "Printer prints in Language").
+implements("engine.go", "Printer prints to Place").
+implements("tools.go", "Tool runs File").
+implements("tools.go", "Tool reads Place").
 
 writes("tools.go", "Command returned Field Value").
 writes("engine.go", "Kind is the kind of this run").
@@ -144,7 +143,7 @@ rests_on(Word, Other) :- defines(Rule, Word), refers_to(Rule, Other), Word != "b
 rests_on(Law, Other) :- lays_down(Rule, Law), refers_to(Rule, Other).
 rests_on("breaks", Law) :- a_law(Law).
 rests_on("prints", Word) :- prints(Anyone, Pattern), names(Pattern, Word).
-used(Word) :- acts_on(Anyone, Pattern), names(Pattern, Word).
+used(Word) :- implements(Anyone, Pattern), names(Pattern, Word).
 used(Other) :- rests_on(Word, Other), used(Word).
 
 breaks(Word, "Every word is used") :- a_word(Word), !used(Word).
