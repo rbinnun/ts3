@@ -1,9 +1,8 @@
-entry_point("run.me").
 loads("engine.go", "spec.mg").
 loads("engine.go", "workflow.mg").
 part_of_the_machine("engine.go").
 part_of_the_machine("tools.go").
-part_of_the_machine("run.me").
+part_of_the_machine("runme.sh").
 part_of_the_machine("go.mod").
 part_of_the_machine("go.sum").
 
@@ -101,7 +100,7 @@ means(".mg", "mangle").
 means(".go", "go").
 means("go.mod", "go module").
 means("go.sum", "go checksums").
-means(Entry, "sh") :- entry_point(Entry).
+means(".sh", "sh").
 with_comments("mangle").
 with_comments("go").
 with_comments("sh").
