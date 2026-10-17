@@ -54,12 +54,12 @@ command: list the folder, uses, list, the folder
 [pattern], is, a pattern
     if [anyone], prints, [pattern]
 
-[command], uses, read a pattern, [pattern]
+[command], uses, read a fact pattern, [pattern]
     if [pattern], is, a pattern
     and [command], is the join of, "command: read the pattern ", [pattern]
 
 [pattern], names, [word]
-    if [command], uses, read a pattern, [pattern]
+    if [command], uses, read a fact pattern, [pattern]
     and [command], returned, word it names, [word]
 
 [command], uses, try, [change]

@@ -30,15 +30,15 @@ type tool struct {
 }
 
 var toolbox = map[string]tool{
-	"list":             {run: list},
-	"count lines":      {run: countLines},
-	"find go comments": {run: findGoComments},
-	"find sh comments": {run: findShComments},
-	"parse":            {run: parseRules},
-	"read a rule":      {run: readRule},
-	"see what fired":   {live: true, run: seeWhatFired},
-	"try":              {run: try},
-	"read a pattern":   {run: readPattern},
+	"list":                {run: list},
+	"count lines":         {run: countLines},
+	"find go comments":    {run: findGoComments},
+	"find sh comments":    {run: findShComments},
+	"parse":               {run: parseRules},
+	"read a rule":         {run: readRule},
+	"see what fired":      {live: true, run: seeWhatFired},
+	"try":                 {run: try},
+	"read a fact pattern": {run: readPattern},
 }
 
 func says(field string, value ast.Constant) finding {
