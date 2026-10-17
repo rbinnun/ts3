@@ -15,6 +15,7 @@ import (
 	"codeberg.org/TauCeti/mangle-go/engine"
 	"codeberg.org/TauCeti/mangle-go/factstore"
 	"codeberg.org/TauCeti/mangle-go/parse"
+	"codeberg.org/TauCeti/mangle-go/unionfind"
 )
 
 const (
@@ -34,7 +35,7 @@ var (
 	mangleEscapes = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\t", `\t`)
 	tests         = map[string]string{"starts with": ":string:starts_with", "ends with": ":string:ends_with"}
 	testWords     = map[string]string{":string:starts_with": "starts with", ":string:ends_with": "ends with"}
-	patternVerbs  = []string{"creates fact", "executes instruction", "prints"}
+	patternVerbs  = []string{"creates fact", "executes instruction", "prints", "shows", "unrolls"}
 	readings      sync.Map
 )
 
@@ -83,16 +84,30 @@ type command struct {
 	name, tool, input string
 }
 
+type section struct {
+	pattern  premise
+	unrolled bool
+}
+
+type derivation struct {
+	conditions []ast.Term
+	key        string
+}
+
+type derivations struct {
+	found map[string][]derivation
+	best  map[string]derivation
+}
+
 type run struct {
 	kind     string
 	rules    []*rule
 	problems []string
 	misread  []string
 	info     *analysis.ProgramInfo
-	helpers  map[string]string
 	order    map[string]int
 	model    factstore.SimpleInMemoryStore
-	fired    map[string]bool
+	proofs   *derivations
 	results  map[string][]ast.Atom
 }
 
@@ -180,17 +195,12 @@ func (r *run) check() {
 func (r *run) build() {
 	var b strings.Builder
 	b.WriteString(r.declarations())
-	r.helpers = map[string]string{}
 	r.order = map[string]int{}
 	for i, rl := range r.rules {
 		b.WriteString(rl.text + "\n")
 		if len(rl.body) == 0 {
 			r.order[rl.clause.Head.String()] = i
-			continue
 		}
-		helper := fmt.Sprintf("fired__%d", i)
-		r.helpers[helper] = rl.id
-		fmt.Fprintf(&b, "%s() :- %s.\n", helper, rl.conditions())
 	}
 	unit, err := parse.Unit(strings.NewReader(b.String()))
 	if err != nil {
@@ -239,21 +249,17 @@ func (r *run) evaluate() {
 	done := map[string]bool{}
 	var live []ast.Atom
 	for round := 0; round < settleLimit; round++ {
+		r.proofs = &derivations{found: map[string][]derivation{}}
 		model, err := r.evalOnce(live)
 		r.model = model
 		if err != nil {
 			r.problem("the rules cannot be evaluated: " + err.Error())
 			return
 		}
-		r.fired = r.firedRules()
 		var fresh []command
 		nextLive := r.namings()
 		for _, c := range r.commands() {
-			t, known := toolbox[c.tool]
-			switch {
-			case known && t.live:
-				nextLive = append(nextLive, r.execute(c)...)
-			case !done[c.key()]:
+			if !done[c.key()] {
 				done[c.key()] = true
 				fresh = append(fresh, c)
 			}
@@ -343,7 +349,84 @@ func (r *run) evalOnce(live []ast.Atom) (factstore.SimpleInMemoryStore, error) {
 	for _, f := range live {
 		store.Add(f)
 	}
-	return store, engine.EvalProgram(r.info, store)
+	return store, engine.EvalProgram(r.info, store, engine.WithDerivationRecorder(r.proofs))
+}
+
+func (d *derivations) RuleFired(rule ast.Clause, head ast.Atom, subst unionfind.UnionFind, premiseFacts []ast.Atom) {
+	if len(rule.Premises) == 0 {
+		return
+	}
+	conditions := make([]ast.Term, len(rule.Premises))
+	keys := make([]string, len(rule.Premises))
+	for i, p := range rule.Premises {
+		if i < len(premiseFacts) && premiseFacts[i].Predicate.Symbol != "" {
+			conditions[i] = premiseFacts[i]
+		} else {
+			conditions[i] = p.ApplySubst(subst)
+		}
+		keys[i] = conditions[i].String()
+	}
+	fact, key := head.String(), strings.Join(keys, "\n")
+	for _, known := range d.found[fact] {
+		if known.key == key {
+			return
+		}
+	}
+	d.found[fact] = append(d.found[fact], derivation{conditions, key})
+}
+
+func (d *derivations) LetEmit(ast.Clause, ast.Atom, ast.ConstSubstList, ast.Atom) {}
+
+func (d *derivations) DoEmit(ast.Clause, ast.Atom, []ast.Constant, []ast.Atom, ast.Atom) {}
+
+func (d *derivations) of(fact ast.Atom) (derivation, bool) {
+	if d == nil {
+		return derivation{}, false
+	}
+	if d.best == nil {
+		d.settle()
+	}
+	best, ok := d.best[fact.String()]
+	return best, ok
+}
+
+func (d *derivations) settle() {
+	d.best = map[string]derivation{}
+	height := map[string]int{}
+	for changed := true; changed; {
+		changed = false
+		for fact, ds := range d.found {
+			for _, dv := range ds {
+				h, ok := d.height(dv, height)
+				if !ok {
+					continue
+				}
+				if old, seen := height[fact]; !seen || h < old || (h == old && dv.key < d.best[fact].key) {
+					height[fact], d.best[fact] = h, dv
+					changed = true
+				}
+			}
+		}
+	}
+}
+
+func (d *derivations) height(dv derivation, height map[string]int) (int, bool) {
+	h := 1
+	for _, c := range dv.conditions {
+		a, ok := c.(ast.Atom)
+		if !ok {
+			continue
+		}
+		if _, derived := d.found[a.String()]; !derived {
+			continue
+		}
+		below, known := height[a.String()]
+		if !known {
+			return 0, false
+		}
+		h = max(h, below+1)
+	}
+	return h, true
 }
 
 func (r *run) factsOnly() factstore.SimpleInMemoryStore {
@@ -357,22 +440,6 @@ func (r *run) factsOnly() factstore.SimpleInMemoryStore {
 		}
 	}
 	return store
-}
-
-func (r *run) firedRules() map[string]bool {
-	fired := map[string]bool{}
-	for _, rl := range r.rules {
-		if len(rl.body) == 0 {
-			fired[rl.id] = true
-		}
-	}
-	for helper, id := range r.helpers {
-		r.model.GetFacts(ast.NewQuery(ast.PredicateSym{Symbol: helper}), func(ast.Atom) error {
-			fired[id] = true
-			return nil
-		})
-	}
-	return fired
 }
 
 func (r *run) commands() []command {
@@ -395,7 +462,7 @@ func (r *run) execute(c command) []ast.Atom {
 		return nil
 	}
 	var facts []ast.Atom
-	for _, f := range t.run(r, c.tool, c.input) {
+	for _, f := range t(r, c.tool, c.input) {
 		facts = append(facts, relation("returned", ast.String(c.name), ast.String(f.field), f.value))
 	}
 	return facts
@@ -441,18 +508,20 @@ func (r *run) facts(words string, args ...ast.BaseTerm) []ast.Atom {
 		found = append(found, a)
 		return nil
 	})
-	sort.SliceStable(found, func(i, j int) bool {
-		oi, iok := r.order[found[i].String()]
-		oj, jok := r.order[found[j].String()]
-		if iok != jok {
-			return iok
-		}
-		if iok && oi != oj {
-			return oi < oj
-		}
-		return found[i].String() < found[j].String()
-	})
+	sort.SliceStable(found, func(i, j int) bool { return r.before(found[i], found[j]) })
 	return found
+}
+
+func (r *run) before(a, b ast.Atom) bool {
+	oa, aok := r.order[a.String()]
+	ob, bok := r.order[b.String()]
+	if aok != bok {
+		return aok
+	}
+	if aok && oa != ob {
+		return oa < ob
+	}
+	return a.String() < b.String()
 }
 
 func (r *run) lookup(words, subject string) (string, bool) {
@@ -479,34 +548,110 @@ func (r *run) print() {
 			r.model.Add(relation("conforms", f.Args[0], ast.String(broken)))
 		}
 	}
-	patterns := r.facts("prints", ast.String(self), ast.Variable{Symbol: "X"})
-	if len(patterns) == 0 {
+	views := r.facts("prints", ast.String(self), ast.Variable{Symbol: "X"})
+	if len(views) == 0 {
 		for _, p := range r.problems {
 			fmt.Fprintln(out, plainOfAtom(property(p, "a problem")))
 		}
 		return
 	}
 	first := true
-	for _, a := range patterns {
-		p, ok := patternOf(textOf(a.Args[1]))
+	for _, v := range views {
+		for _, s := range r.sections(v.Args[1]) {
+			lines := r.lines(s)
+			if len(lines) == 0 {
+				continue
+			}
+			if !first {
+				fmt.Fprintln(out)
+			}
+			first = false
+			fmt.Fprintln(out, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+func (r *run) sections(view ast.BaseTerm) []section {
+	entries := append(r.facts("shows", view, ast.Variable{Symbol: "X"}), r.facts("unrolls", view, ast.Variable{Symbol: "X"})...)
+	if len(entries) == 0 {
+		entries = []ast.Atom{relation("shows", view, view)}
+	}
+	sort.SliceStable(entries, func(i, j int) bool { return r.before(entries[i], entries[j]) })
+	var sections []section
+	at := map[string]int{}
+	for _, e := range entries {
+		p, ok := patternOf(textOf(e.Args[1]))
 		if !ok {
 			continue
 		}
-		var lines []string
-		r.model.GetFacts(p.query(), func(fact ast.Atom) error {
-			lines = append(lines, plainOfAtom(fact))
-			return nil
-		})
-		if len(lines) == 0 {
-			continue
+		key := p.query().String()
+		i, seen := at[key]
+		if !seen {
+			i = len(sections)
+			at[key] = i
+			sections = append(sections, section{pattern: p})
 		}
-		sort.Slice(lines, func(i, j int) bool { return naturalLess(lines[i], lines[j]) })
-		if !first {
-			fmt.Fprintln(out)
+		if e.Predicate.Symbol == nameOf("unrolls") {
+			sections[i].unrolled = true
 		}
-		first = false
-		fmt.Fprintln(out, strings.Join(lines, "\n"))
 	}
+	return sections
+}
+
+func (r *run) lines(s section) []string {
+	type shown struct {
+		fact ast.Atom
+		line string
+	}
+	var found []shown
+	r.model.GetFacts(s.pattern.query(), func(fact ast.Atom) error {
+		found = append(found, shown{fact, plainOfAtom(fact)})
+		return nil
+	})
+	sort.Slice(found, func(i, j int) bool { return naturalLess(found[i].line, found[j].line) })
+	var lines []string
+	seen := map[string]bool{}
+	for _, f := range found {
+		if s.unrolled {
+			lines = append(lines, r.unroll(f.fact, seen)...)
+		} else {
+			lines = append(lines, f.line)
+		}
+	}
+	return lines
+}
+
+func (r *run) unroll(fact ast.Atom, seen map[string]bool) []string {
+	if seen[fact.String()] {
+		return nil
+	}
+	seen[fact.String()] = true
+	lines := []string{plainOfAtom(fact)}
+	d, ok := r.proofs.of(fact)
+	if !ok {
+		return lines
+	}
+	var below []ast.Atom
+	for i, c := range d.conditions {
+		text, err := plainOfTerm(c)
+		if err != nil {
+			text = c.String()
+		}
+		keyword := "and "
+		if i == 0 {
+			keyword = "if "
+		}
+		lines = append(lines, "    "+keyword+text)
+		if a, ok := c.(ast.Atom); ok {
+			if _, derived := r.proofs.of(a); derived {
+				below = append(below, a)
+			}
+		}
+	}
+	for _, a := range below {
+		lines = append(lines, r.unroll(a, seen)...)
+	}
+	return lines
 }
 
 func (r *run) answer() string {

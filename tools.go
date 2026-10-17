@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"codeberg.org/TauCeti/mangle-go/ast"
@@ -24,18 +23,13 @@ type finding struct {
 	value ast.Constant
 }
 
-type tool struct {
-	live bool
-	run  func(r *run, name, input string) []finding
-}
+type tool func(r *run, name, input string) []finding
 
 var toolbox = map[string]tool{
-	"list":             {run: list},
-	"count lines":      {run: countLines},
-	"find go comments": {run: findGoComments},
-	"find sh comments": {run: findShComments},
-	"see what fired":   {live: true, run: seeWhatFired},
-	"try":              {run: try},
+	"list":             list,
+	"find go comments": findGoComments,
+	"find sh comments": findShComments,
+	"try":              try,
 }
 
 func says(field string, value ast.Constant) finding {
@@ -69,18 +63,6 @@ func list(r *run, name, input string) []finding {
 		found = append(found, says("file", ast.String(f)))
 	}
 	return found
-}
-
-func countLines(r *run, name, file string) []finding {
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return nil
-	}
-	n := bytes.Count(data, []byte("\n"))
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		n++
-	}
-	return []finding{says("lines", ast.Number(int64(n)))}
 }
 
 func findGoComments(r *run, name, file string) []finding {
@@ -137,19 +119,6 @@ func findShComments(r *run, name, file string) []finding {
 	return found
 }
 
-func seeWhatFired(r *run, name, input string) []finding {
-	var ids []string
-	for id := range r.fired {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	var found []finding
-	for _, id := range ids {
-		found = append(found, says("rule that fired", ast.String(id)))
-	}
-	return found
-}
-
 func try(r *run, name, change string) []finding {
 	script, ok := r.lookup("runs", name)
 	if !ok {
@@ -186,15 +155,12 @@ func try(r *run, name, change string) []finding {
 	}
 	found := []finding{says("exit code", ast.Number(int64(cmd.ProcessState.ExitCode())))}
 	for _, line := range strings.Split(out.String(), "\n") {
-		p, err := readPremise(line)
-		if err != nil || p.shape != relationShape {
+		if line == "" || line[0] == ' ' || line[0] == '\t' {
 			continue
 		}
-		switch {
-		case p.name == nameOf("breaks") && len(p.args) == 2 && p.args[1].isText():
+		p, err := readPremise(line)
+		if err == nil && p.shape == relationShape && p.name == nameOf("breaks") && len(p.args) == 2 && p.args[1].isText() {
 			found = append(found, says("broke", ast.String(p.args[1].text)))
-		case p.name == nameOf("never fired") && len(p.args) == 1 && p.args[0].isText():
-			found = append(found, says("never fired", ast.String(p.args[0].text)))
 		}
 	}
 	return found

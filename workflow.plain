@@ -4,14 +4,6 @@ command: list the folder, uses, list, the folder
     if [command], uses, list, the folder
     and [command], returned, file, [file]
 
-[command], uses, count lines, [file]
-    if [file], is, in the folder
-    and [command], is the join of, "command: count the lines of ", [file]
-
-[file], has lines, [count]
-    if [command], uses, count lines, [file]
-    and [command], returned, lines, [count]
-
 [command], uses, [tool], [file]
     if [file], written in, [language]
     and [tool], finds comments in, [language]
@@ -35,17 +27,3 @@ command: list the folder, uses, list, the folder
     if [command], uses, try, [change]
     and [command], returned, exit code, [code]
     and [answer], exits with, [code]
-
-command: see what fired, uses, see what fired, this run
-
-[rule], is, fired in a trial
-    if [command], uses, try, [any change]
-    and [command], returned, never fired, [any rule]
-    and [rule], is in, [any file]
-    and not [command], returned, never fired, [rule]
-
-[rule], is, never fired
-    if [rule], is in, [any file]
-    and [command], uses, see what fired, [any input]
-    and not [command], returned, rule that fired, [rule]
-    and not [rule], is, fired in a trial
