@@ -15,20 +15,20 @@ executes("engine.go", "[go file] prints to [place]").
 executes("tools.go", "[tool] runs [file]").
 executes("tools.go", "[tool] reads [place]").
 
-writes("tools.go", "[command] returned [field] [value]").
-writes("engine.go", "[kind] is the kind of this run").
-writes("engine.go", "[text] is a problem").
-writes("workflow.mg", "[file] is in the folder").
-writes("workflow.mg", "[file] has the comment [text]").
-writes("workflow.mg", "[file] has lines [count]").
-writes("workflow.mg", "[rule] is in [file]").
-writes("workflow.mg", "[rule] defines [word]").
-writes("workflow.mg", "[rule] refers to [word]").
-writes("workflow.mg", "[rule] lays down [law]").
-writes("workflow.mg", "[change] broke [law]").
-writes("workflow.mg", "[change] answered [answer]").
-writes("workflow.mg", "[rule] is never fired").
-writes("workflow.mg", "[pattern] names [word]").
+writes_fact("tools.go", "[command] returned [field] [value]").
+writes_fact("engine.go", "[kind] is the kind of this run").
+writes_fact("engine.go", "[text] is a problem").
+writes_fact("workflow.mg", "[file] is in the folder").
+writes_fact("workflow.mg", "[file] has the comment [text]").
+writes_fact("workflow.mg", "[file] has lines [count]").
+writes_fact("workflow.mg", "[rule] is in [file]").
+writes_fact("workflow.mg", "[rule] defines [word]").
+writes_fact("workflow.mg", "[rule] refers to [word]").
+writes_fact("workflow.mg", "[rule] lays down [law]").
+writes_fact("workflow.mg", "[change] broke [law]").
+writes_fact("workflow.mg", "[change] answered [answer]").
+writes_fact("workflow.mg", "[rule] is never fired").
+writes_fact("workflow.mg", "[pattern] names [word]").
 
 Decl uses(Command, Tool, Input).
 Decl returned(Command, Field, Value).
@@ -88,7 +88,7 @@ must_break("a missing workflow", "Every file engine.go loads is in the folder").
 
 has_a_rule_for(File, Word) :- is_in(Rule, File), defines(Rule, Word).
 
-breaks(File, "Each word has one writer") :- has_a_rule_for(File, Word), names(Pattern, Word), writes(Writer, Pattern), Writer != File.
+breaks(File, "Each word has one writer") :- has_a_rule_for(File, Word), names(Pattern, Word), writes_fact(Writer, Pattern), Writer != File.
 
 adds_line("a workflow that fakes what the tools returned", "workflow.mg", 'returned("command: a fake", "file", "nowhere").').
 must_break("a workflow that fakes what the tools returned", "Each word has one writer").
@@ -138,7 +138,7 @@ adds_line("a change that expects an unknown law", "workflow.mg", 'must_break("a 
 must_break("a change that expects an unknown law", "Every change comes out as stated").
 
 a_word(Word) :- has_a_rule_for("spec.mg", Word).
-a_word(Word) :- writes(Anyone, Pattern), names(Pattern, Word).
+a_word(Word) :- writes_fact(Anyone, Pattern), names(Pattern, Word).
 rests_on(Word, Other) :- defines(Rule, Word), refers_to(Rule, Other), Word != "breaks".
 rests_on(Law, Other) :- lays_down(Rule, Law), refers_to(Rule, Other).
 rests_on("breaks", Law) :- a_law(Law).
