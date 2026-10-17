@@ -1,6 +1,5 @@
-cd "$(dirname "$0")" || exit
-dir=$(mktemp -d) || exit
-go build -trimpath -buildvcs=false -o "$dir/engine" . && "$dir/engine" spec.plain
-code=$?
-rm -rf "$dir"
-exit "$code"
+cd "$(dirname "$0")" || exit 2
+dir=$(mktemp -d) || exit 2
+trap 'rm -rf "$dir"' EXIT
+go build -o "$dir/machine" . || exit 2
+"$dir/machine" spec.plain "$@"
