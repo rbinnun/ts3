@@ -15,7 +15,9 @@ engine.go, executes instruction, [text] is a problem
 engine.go, executes instruction, [go file] prints [view]
 engine.go, executes instruction, [go file] prints in [language]
 engine.go, executes instruction, [go file] prints to [place]
-engine.go, executes instruction, [view] unrolls [fact pattern]
+engine.go, executes instruction, [rule] is in the knowledge view
+engine.go, executes instruction, [word] is observed
+engine.go, executes instruction, [view] reproduces [fact pattern]
 engine.go, executes instruction, [view] shows [fact pattern]
 tools.go, executes instruction, [tool] runs [file]
 tools.go, executes instruction, [tool] reads [place]
@@ -36,6 +38,7 @@ workflow.plain, creates fact, [file] is in the folder
 workflow.plain, creates fact, [file] has the comment [text]
 workflow.plain, creates fact, [change] broke [law]
 workflow.plain, creates fact, [change] answered [answer]
+workflow.plain, creates fact, [change] explains [line]
 
 list, returns, file
 find go comments, returns, comment
@@ -46,6 +49,7 @@ try, runs, runme.sh
 try, reads, standard output
 try, returns, exit code
 try, returns, broke
+try, returns, why
 
 [tool], is, in the catalog
     if [tool], returns, [anything]
@@ -177,7 +181,8 @@ this run is a change
     if [change], must break, [law]
     and not [law], is, a law
 [law], is, proven
-    if [any change], broke, [law]
+    if [change], broke, [law]
+    and [change], explains, [any line]
 [law], is, proven
     if this run is a change
     and [any change], must break, [law]
@@ -239,13 +244,26 @@ broken, exits with, 2
 a spec that cannot load, adds line, spec.plain, "a, b"
 a spec that cannot load, must answer, broken
 
+[rule], is, in the knowledge view
+    if [rule], defines, [word]
+    and [word], is, used
+
+[word], is, observed
+    if [word], is, used
+    and not [word], is, defined by a rule
+
+[word], is, defined by a rule
+    if [any rule], defines, [word]
+
 engine.go, prints, the knowledge view
 engine.go, prints in, plain language
 engine.go, prints to, standard output
-the knowledge view, unrolls, [folder] conforms [answer]
+the knowledge view, reproduces, [folder] conforms [answer]
+the knowledge view, reproduces, [thing] breaks [law]
 the knowledge view, shows, [folder] conforms [answer]
 the knowledge view, shows, [thing] breaks [law]
 the knowledge view, shows, [change] broke [law]
 the knowledge view, shows, [change] answered [answer]
+the knowledge view, shows, [change] explains [line]
 the knowledge view, shows, [text] is a problem
 the knowledge view, shows, [line] is misread
