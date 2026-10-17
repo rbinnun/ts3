@@ -1,3 +1,7 @@
+declared: [command], returned, [field], [value]
+declared: [kind], is, the kind of this run
+declared: [line], is, misread
+
 command: list the folder, uses, list, the folder
 
 [file], is, in the folder
