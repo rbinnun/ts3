@@ -10,7 +10,7 @@ engine.go, executes instruction, [go file] loads [plain file]
 engine.go, executes instruction, [plain] means in mangle [mangle]
 engine.go, executes instruction, [command] uses [tool] [input]
 engine.go, executes instruction, [answer] exits with [code]
-engine.go, executes instruction, [go file] prints [pattern]
+engine.go, executes instruction, [go file] prints [fact pattern]
 engine.go, executes instruction, [go file] prints in [language]
 engine.go, executes instruction, [go file] prints to [place]
 tools.go, executes instruction, [tool] runs [file]
@@ -31,7 +31,7 @@ workflow.plain, creates fact, [rule] lays down [law]
 workflow.plain, creates fact, [change] broke [law]
 workflow.plain, creates fact, [change] answered [answer]
 workflow.plain, creates fact, [rule] is never fired
-workflow.plain, creates fact, [pattern] names [word]
+workflow.plain, creates fact, [fact pattern] names [word]
 
 declared: [command], uses, [tool], [input]
 declared: [command], returned, [field], [value]
@@ -47,7 +47,7 @@ declared: [rule], lays down, [law]
 declared: [change], broke, [law]
 declared: [change], answered, [answer]
 declared: [rule], is, never fired
-declared: [pattern], names, [word]
+declared: [fact pattern], names, [word]
 declared: [line], is, misread
 
 list, returns, file
@@ -66,7 +66,7 @@ try, reads, standard output
 try, returns, exit code
 try, returns, broke
 try, returns, never fired
-read a pattern, returns, word it names
+read a fact pattern, returns, word it names
 
 [tool], is, in the catalog
     if [tool], returns, [anything]
@@ -121,8 +121,8 @@ a missing workflow, must break, Every file engine.go loads is in the folder
 
 [file], breaks, Each word has one creator
     if [file], has a rule for, [word]
-    and [pattern], names, [word]
-    and [creator], creates fact, [pattern]
+    and [fact pattern], names, [word]
+    and [creator], creates fact, [fact pattern]
     and [creator], differs from, [file]
 
 a workflow that fakes what the tools returned, adds line, workflow.plain, "command: a fake, returned, file, nowhere"
@@ -220,8 +220,8 @@ a change that expects an unknown law, must break, Every change comes out as stat
 [word], is, a word
     if spec.plain, has a rule for, [word]
 [word], is, a word
-    if [anyone], creates fact, [pattern]
-    and [pattern], names, [word]
+    if [anyone], creates fact, [fact pattern]
+    and [fact pattern], names, [word]
 [word], rests on, [other]
     if [rule], defines, [word]
     and [rule], refers to, [other]
@@ -232,11 +232,11 @@ a change that expects an unknown law, must break, Every change comes out as stat
 breaks, rests on, [law]
     if [law], is, a law
 prints, rests on, [word]
-    if [anyone], prints, [pattern]
-    and [pattern], names, [word]
+    if [anyone], prints, [fact pattern]
+    and [fact pattern], names, [word]
 [word], is, used
-    if [anyone], executes instruction, [pattern]
-    and [pattern], names, [word]
+    if [anyone], executes instruction, [fact pattern]
+    and [fact pattern], names, [word]
 [other], is, used
     if [word], rests on, [other]
     and [word], is, used
