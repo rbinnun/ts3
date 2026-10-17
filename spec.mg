@@ -6,7 +6,7 @@ part_of_the_machine("runme.sh").
 part_of_the_machine("go.mod").
 part_of_the_machine("go.sum").
 
-implements("engine.go", "Reader loads File").
+implements("engine.go", "Program loads File").
 implements("engine.go", "Command uses Tool Input").
 implements("engine.go", "Answer exits with Code").
 implements("engine.go", "Printer prints Pattern").
