@@ -1,7 +1,0 @@
-#!/bin/sh
-cd "$(dirname "$0")" || exit
-place=$(mktemp -d) || exit
-go build -o "$place/machine" . && "$place/machine" spec.mg
-answer=$?
-rm -rf "$place"
-exit "$answer"
