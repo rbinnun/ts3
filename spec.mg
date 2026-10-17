@@ -61,11 +61,11 @@ returns("try", "broke").
 returns("try", "never fired").
 returns("read a pattern", "word it names").
 
-in_the_catalog(Tool) :- returns(Tool, _).
-named_as_a_command(Command) :- uses(Command, _, _), :string:starts_with(Command, "command: ").
+in_the_catalog(Tool) :- returns(Tool, Anything).
+named_as_a_command(Command) :- uses(Command, AnyTool, AnyInput), :string:starts_with(Command, "command: ").
 
-breaks(Command, "Every command uses a tool in the catalog") :- uses(Command, Tool, _), !in_the_catalog(Tool).
-breaks(Command, "Every command is named as a command") :- uses(Command, _, _), !named_as_a_command(Command).
+breaks(Command, "Every command uses a tool in the catalog") :- uses(Command, Tool, AnyInput), !in_the_catalog(Tool).
+breaks(Command, "Every command is named as a command") :- uses(Command, AnyTool, AnyInput), !named_as_a_command(Command).
 
 adds_line("a command with a tool nobody has", "workflow.mg", 'uses("command: guess", "guess", "x").').
 must_break("a command with a tool nobody has", "Every command uses a tool in the catalog").
@@ -73,7 +73,7 @@ must_break("a command with a tool nobody has", "Every command uses a tool in the
 adds_line("a command not named as a command", "workflow.mg", 'uses("list it", "list", "the folder").').
 must_break("a command not named as a command", "Every command is named as a command").
 
-used(File) :- loads(_, File).
+used(File) :- loads(Anyone, File).
 used(File) :- part_of_the_machine(File).
 
 breaks(File, "Every file is used") :- in_the_folder(File), !used(File).
@@ -106,10 +106,10 @@ with_comments("go").
 with_comments("sh").
 
 written_in(File, Language) :- in_the_folder(File), means(Ending, Language), :string:ends_with(File, Ending).
-known(File) :- written_in(File, _).
+known(File) :- written_in(File, AnyLanguage).
 
 breaks(File, "The only knowledge is Datalog") :- in_the_folder(File), !known(File).
-breaks(File, "The only knowledge is Datalog") :- has_the_comment(File, _).
+breaks(File, "The only knowledge is Datalog") :- has_the_comment(File, AnyComment).
 
 adds_line("a file that is not datalog", "notes.txt", "a note").
 must_break("a file that is not datalog", "The only knowledge is Datalog").
@@ -118,14 +118,14 @@ adds_line("a comment", "workflow.mg", "# a note").
 must_break("a comment", "The only knowledge is Datalog").
 
 this_run_is_a_change() :- the_kind_of_this_run("a change").
-a_change(Change) :- adds_line(Change, _, _).
+a_change(Change) :- adds_line(Change, AnyFile, AnyLine).
 missed(Change) :- must_break(Change, Law), !broke(Change, Law).
 answered_otherwise(Change) :- must_answer(Change, Answer), !answered(Change, Answer).
 as_stated(Change) :- a_change(Change), !missed(Change), !answered_otherwise(Change).
-a_law(Law) :- lays_down(_, Law).
+a_law(Law) :- lays_down(AnyRule, Law).
 about_an_unknown_law(Change) :- must_break(Change, Law), !a_law(Law).
-proven(Law) :- broke(_, Law).
-proven(Law) :- this_run_is_a_change(), must_break(_, Law).
+proven(Law) :- broke(AnyChange, Law).
+proven(Law) :- this_run_is_a_change(), must_break(AnyChange, Law).
 
 breaks(Law, "Every law has a counterexample") :- a_law(Law), !proven(Law).
 breaks(Change, "Every change comes out as stated") :- a_change(Change), !this_run_is_a_change(), !as_stated(Change).
@@ -138,12 +138,12 @@ adds_line("a change that expects an unknown law", "workflow.mg", 'must_break("a 
 must_break("a change that expects an unknown law", "Every change comes out as stated").
 
 a_word(Word) :- has_a_rule_for("spec.mg", Word).
-a_word(Word) :- writes(_, Pattern), names(Pattern, Word).
+a_word(Word) :- writes(Anyone, Pattern), names(Pattern, Word).
 rests_on(Word, Other) :- defines(Rule, Word), refers_to(Rule, Other), Word != "breaks".
 rests_on(Law, Other) :- lays_down(Rule, Law), refers_to(Rule, Other).
 rests_on("breaks", Law) :- a_law(Law).
-rests_on("prints", Word) :- prints(_, Pattern), names(Pattern, Word).
-used(Word) :- reads(_, Pattern), names(Pattern, Word).
+rests_on("prints", Word) :- prints(Anyone, Pattern), names(Pattern, Word).
+used(Word) :- reads(Anyone, Pattern), names(Pattern, Word).
 used(Other) :- rests_on(Word, Other), used(Word).
 
 breaks(Word, "Every word is used") :- a_word(Word), !used(Word).
@@ -151,7 +151,7 @@ breaks(Word, "Every word is used") :- a_word(Word), !used(Word).
 adds_line("a word nobody uses", "spec.mg", 'lonely("a").').
 must_break("a word nobody uses", "Every word is used").
 
-a_law_is_broken() :- breaks(_, _).
+a_law_is_broken() :- breaks(Anything, AnyLaw).
 conforms("the folder", "false") :- a_law_is_broken().
 conforms("the folder", "true") :- !a_law_is_broken().
 exits_with("true", 0).
@@ -182,5 +182,5 @@ a_concept("The folder conforms to the spec").
 a_concept(Law) :- a_law(Law).
 is_made_of("The folder conforms to the spec", Rule) :- defines(Rule, "conforms").
 is_made_of(Law, Rule) :- lays_down(Rule, Law).
-is_tested_by("The folder conforms to the spec", Change) :- must_answer(Change, _).
+is_tested_by("The folder conforms to the spec", Change) :- must_answer(Change, AnyAnswer).
 is_tested_by(Law, Change) :- must_break(Change, Law).
