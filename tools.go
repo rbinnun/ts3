@@ -45,6 +45,9 @@ func (w workshop) use(c call) result {
 			return w.findComments(c, find)
 		}
 	}
+	if len(textsOf(w.store, "returns", c.tool)) == 0 {
+		return result{}
+	}
 	return failure(fmt.Sprintf("%s calls %s, which tools.go does not have", showCommand(c), c.tool))
 }
 
