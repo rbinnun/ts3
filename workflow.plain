@@ -1,11 +1,14 @@
 command: list the folder, uses, list, the folder
+
 [file], is, in the folder
-    if command: list the folder, returned, file, [file]
+    if [command], uses, list, the folder
+    and [command], returned, file, [file]
 
 [command], uses, [tool], [file]
     if [file], written in, [language]
     and [tool], finds comments in, [language]
     and [command], is the join of, "command: find the comments in ", [file]
+
 [file], has the comment, [comment]
     if [command], uses, [tool], [file]
     and [tool], finds comments in, [any language]

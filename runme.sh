@@ -1,8 +1,8 @@
 cd "$(dirname "$0")" || exit 2
-place=$(mktemp -d) || exit 2
-if go build -o "$place/machine" .
+place="$(mktemp -d)" || exit 2
+if go build -o "$place/engine" .
 then
-	"$place/machine" "$@"
+	"$place/engine" spec.plain
 	answer=$?
 else
 	answer=2
