@@ -1,327 +1,342 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"unicode"
 
-	"codeberg.org/TauCeti/mangle-go/analysis"
-	"codeberg.org/TauCeti/mangle-go/ast"
-	"codeberg.org/TauCeti/mangle-go/engine"
-	"codeberg.org/TauCeti/mangle-go/factstore"
-	"codeberg.org/TauCeti/mangle-go/parse"
-	"codeberg.org/TauCeti/mangle-go/unionfind"
+	"github.com/google/mangle/analysis"
+	"github.com/google/mangle/ast"
+	"github.com/google/mangle/engine"
+	"github.com/google/mangle/factstore"
+	"github.com/google/mangle/parse"
+	"github.com/google/mangle/unionfind"
 )
 
 const (
-	machine       = "engine.go"
+	selfName      = "engine.go"
 	firstFile     = "spec.plain"
-	theFolder     = "the folder"
-	brokenAnswer  = "broken"
 	knowledgeView = "the knowledge view"
-	patternSlot   = "fact pattern"
-	placeholder   = "PlainArg"
+	brokenAnswer  = "broken"
+	fallbackCode  = 2
 	maxRounds     = 50
+	unstated      = int(^uint(0) >> 1)
+	joinVerb      = "is the join of"
+	differsVerb   = "differs from"
+	concatName    = "fn:string:concat"
 )
 
 var (
 	wordsPattern  = regexp.MustCompile(`^[a-z][a-z0-9]*( [a-z0-9]+)*$`)
-	blankPattern  = regexp.MustCompile(`^[a-z][a-z0-9]*( [a-z][a-z0-9]*)*$`)
+	blankPattern  = regexp.MustCompile(`^\[([^\[\]]*)\]$`)
 	numberPattern = regexp.MustCompile(`^-?[0-9]+$`)
-	slotPattern   = regexp.MustCompile(`\[[^\[\]]*\]`)
+	slotPattern   = regexp.MustCompile(`\[([^\[\]]+)\]`)
+	builtinVerbs  = map[string]string{
+		"ends with":   ":string:ends_with",
+		"starts with": ":string:starts_with",
+	}
+	patternVerbs = map[string]bool{
+		"executes instruction": true,
+		"creates fact":         true,
+		"shows":                true,
+		"gives reasons for":    true,
+	}
 )
-
-type kind int
-
-const (
-	textValue kind = iota
-	numberValue
-	blankValue
-)
-
-type value struct {
-	kind kind
-	text string
-	num  int64
-}
-
-type atom struct {
-	verb    string
-	pred    string
-	args    []value
-	negated bool
-	tpl     *template
-}
-
-type template struct {
-	verb  string
-	arity int
-	text  string
-	term  ast.Term
-}
-
-type raw struct {
-	line    int
-	lines   []string
-	problem string
-}
 
 type part struct {
 	text   string
 	quoted bool
 }
 
-type statement struct {
-	file       string
-	line       int
-	lines      []string
-	id         string
-	head       atom
-	conds      []atom
-	ok         bool
-	problem    string
-	translated bool
-	usable     bool
-	differs    bool
-	clause     ast.Clause
-	readBack   string
-}
-
-type event struct {
+type rule struct {
+	id     string
+	file   string
+	text   []string
+	head   ast.Atom
+	body   []ast.Term
+	broken bool
+	ready  bool
 	clause ast.Clause
-	subst  ast.ConstSubstList
 }
 
-type recorder struct {
-	mu     sync.Mutex
-	events map[string][]event
+type call struct {
+	command ast.Constant
+	tool    string
+	input   string
 }
 
-func (r *recorder) RuleFired(rule ast.Clause, head ast.Atom, subst unionfind.UnionFind, _ []ast.Atom) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	k := head.String()
-	r.events[k] = append(r.events[k], event{rule, subst.AsConstSubstList()})
+type problemList struct {
+	seen  map[string]bool
+	items []string
 }
 
-func (r *recorder) LetEmit(ast.Clause, ast.Atom, ast.ConstSubstList, ast.Atom) {}
-
-func (r *recorder) DoEmit(ast.Clause, ast.Atom, []ast.Constant, []ast.Atom, ast.Atom) {}
-
-type outcome struct {
-	store    factstore.SimpleInMemoryStore
-	events   map[string][]event
-	problems int
-	err      error
+func (p *problemList) add(text string) {
+	if p.seen == nil {
+		p.seen = map[string]bool{}
+	}
+	if p.seen[text] {
+		return
+	}
+	p.seen[text] = true
+	p.items = append(p.items, text)
 }
 
-type position struct {
-	pred  string
-	arity int
-	index int
-}
-
-type knower struct {
-	statements    []*statement
-	templates     map[string]*template
-	templateOrder []string
-	facts         []ast.Atom
-	factSeen      map[string]bool
-	problems      []string
-	problemSeen   map[string]bool
-	order         map[string]int
-	written       map[string]string
-	patterns      map[string]atom
-	patternOrder  []string
-	mu            sync.Mutex
+func (p *problemList) facts() []ast.Atom {
+	var out []ast.Atom
+	for _, text := range p.items {
+		out = append(out, fact("a problem", ast.String(text)))
+	}
+	return out
 }
 
 func main() {
-	k := &knower{
-		templates:   map[string]*template{},
-		factSeen:    map[string]bool{},
-		problemSeen: map[string]bool{},
-		order:       map[string]int{},
-		written:     map[string]string{},
-		patterns:    map[string]atom{},
-	}
-	k.load()
-	k.learnTemplates()
-	k.translate()
-	k.describe()
-	if os.Getenv(changeVariable) != "" {
-		k.addFact(ast.NewAtom("this_run_is_a_change"))
-	}
-	os.Exit(k.finish(k.run()))
+	change := len(os.Args) > 1 && os.Args[1] == "change"
+	os.Exit(run(change))
 }
 
-func (k *knower) addProblem(text string) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if k.problemSeen[text] {
-		return
+func run(change bool) int {
+	var problems problemList
+	rules := load(&problems)
+	var readBack []string
+	for _, r := range rules {
+		if r.broken {
+			continue
+		}
+		if r.prepare(&problems) {
+			readBack = append(readBack, r.id)
+		}
 	}
-	k.problemSeen[text] = true
-	k.problems = append(k.problems, text)
-}
+	observed := observe(rules, readBack, change)
+	order := statedOrder(rules)
+	shop := workshop{change: change, order: order}
 
-func (k *knower) problemAt(s *statement, text string) {
-	k.addProblem(fmt.Sprintf("%s line %d: %s", s.file, s.line, text))
-}
-
-func (k *knower) addFact(a ast.Atom) {
-	key := a.String()
-	if k.factSeen[key] {
-		return
+	executed := map[string]bool{}
+	var returned []ast.Atom
+	var store factstore.SimpleInMemoryStore
+	for round := 0; ; round++ {
+		store = evaluate(rules, join(observed, problems.facts(), returned), &problems)
+		pending := pendingCalls(store, executed)
+		if len(pending) == 0 {
+			break
+		}
+		if round == maxRounds {
+			problems.add(fmt.Sprintf("the commands still called new tools after %d rounds", maxRounds))
+			break
+		}
+		shop.store = store
+		for _, res := range runCalls(pending, shop) {
+			returned = append(returned, res.returned...)
+			for _, text := range res.problems {
+				problems.add(text)
+			}
+		}
 	}
-	k.factSeen[key] = true
-	k.facts = append(k.facts, a)
-}
 
-func (k *knower) fact(pred string, args ...string) {
-	terms := make([]ast.BaseTerm, len(args))
-	for i, a := range args {
-		terms[i] = ast.String(a)
+	reasons := explain(store, rules)
+	checkMeanings(store, &problems)
+	outputs := printing(store, &problems)
+	store = evaluate(rules, join(observed, problems.facts(), returned, reasons), &problems)
+	code := decide(store, &problems)
+	for _, out := range outputs {
+		for _, view := range out.views {
+			printView(out.place, view, store, rules, order)
+		}
 	}
-	k.addFact(ast.NewAtom(mangleName(pred), terms...))
+	return code
 }
 
-func (k *knower) load() {
+func join(lists ...[]ast.Atom) []ast.Atom {
+	var out []ast.Atom
+	for _, l := range lists {
+		out = append(out, l...)
+	}
+	return out
+}
+
+func load(problems *problemList) []*rule {
+	var rules []*rule
+	seen := map[string]bool{}
 	queue := []string{firstFile}
-	loaded := map[string]bool{}
 	for len(queue) > 0 {
 		file := queue[0]
 		queue = queue[1:]
-		if loaded[file] {
+		if seen[file] {
 			continue
 		}
-		loaded[file] = true
-		src, err := os.ReadFile(file)
+		seen[file] = true
+		data, err := os.ReadFile(file)
 		if err != nil {
-			if file == firstFile {
-				k.addProblem(fmt.Sprintf("engine.go can't read %s", file))
+			if !os.IsNotExist(err) {
+				problems.add(fmt.Sprintf("%s cannot load %s: %v", selfName, file, err))
 			}
 			continue
 		}
-		raws, loose := splitStatements(string(src))
-		for _, l := range loose {
-			k.addProblem(file + " " + l)
+		loaded, found := readPlain(file, string(data))
+		for _, text := range found {
+			problems.add(text)
 		}
-		for _, r := range raws {
-			s := parseStatement(file, r)
-			k.statements = append(k.statements, s)
-			if !s.ok {
-				k.problemAt(s, s.problem)
+		for _, r := range loaded {
+			rules = append(rules, r)
+			if r.broken || len(r.body) > 0 || r.head.Predicate != symbolOf("loads", 2) {
 				continue
 			}
-			if f, ok := s.loads(); ok {
-				queue = append(queue, f)
+			who, ok1 := stringOf(r.head.Args[0])
+			what, ok2 := stringOf(r.head.Args[1])
+			if ok1 && ok2 && who == selfName {
+				queue = append(queue, what)
 			}
 		}
 	}
+	return rules
 }
 
-func (s *statement) loads() (string, bool) {
-	h := s.head
-	if len(s.conds) > 0 || h.verb != "loads" || len(h.args) != 2 {
-		return "", false
-	}
-	if h.args[0].kind != textValue || h.args[0].text != machine || h.args[1].kind != textValue {
-		return "", false
-	}
-	return h.args[1].text, true
-}
-
-func splitStatements(src string) ([]raw, []string) {
-	var out []raw
-	var loose []string
-	open := false
+func readPlain(file, src string) ([]*rule, []string) {
+	var rules []*rule
+	var problems []string
+	var cur *rule
 	lines := strings.Split(src, "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1]
 	}
-	for i, l := range lines {
-		t := strings.TrimLeft(l, " \t")
-		switch {
-		case strings.TrimSpace(l) == "":
-			open = false
-		case t != l:
-			if !open {
-				loose = append(loose, fmt.Sprintf("line %d: %s belongs to no rule", i+1, plainText(l)))
+	for i, raw := range lines {
+		at := fmt.Sprintf("%s:%d", file, i+1)
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		if raw[0] == ' ' || raw[0] == '\t' {
+			if cur == nil {
+				problems = append(problems, fmt.Sprintf("%s: the condition %s has no rule above it", at, strings.TrimSpace(raw)))
 				continue
 			}
-			r := &out[len(out)-1]
-			r.lines = append(r.lines, l)
-			if r.problem == "" && !strings.HasPrefix(t, "if ") && !strings.HasPrefix(t, "and ") {
-				r.problem = fmt.Sprintf("%s is indented, so it must start with if or and", plainText(l))
+			cur.text = append(cur.text, raw)
+			if cur.broken {
+				continue
 			}
-		default:
-			out = append(out, raw{line: i + 1, lines: []string{l}})
-			open = true
+			t, err := parseCondition(strings.TrimLeft(raw, " \t"))
+			if err != nil {
+				cur.broken = true
+				problems = append(problems, fmt.Sprintf("%s: %v", at, err))
+				continue
+			}
+			cur.body = append(cur.body, t)
+			continue
 		}
+		cur = &rule{id: at, file: file, text: []string{raw}}
+		rules = append(rules, cur)
+		t, err := parseLine(raw)
+		if err != nil {
+			cur.broken = true
+			problems = append(problems, fmt.Sprintf("%s: %v", at, err))
+			continue
+		}
+		a, ok := t.(ast.Atom)
+		if !ok || a.Predicate.IsBuiltin() {
+			cur.broken = true
+			problems = append(problems, fmt.Sprintf("%s: %s can only be a condition", at, raw))
+			continue
+		}
+		cur.head = a
 	}
-	return out, loose
+	return rules, problems
 }
 
-func parseStatement(file string, r raw) *statement {
-	s := &statement{file: file, line: r.line, lines: r.lines}
-	ids := []string{r.lines[0]}
-	for _, l := range r.lines[1:] {
-		ids = append(ids, strings.TrimLeft(l, " \t"))
+func parseCondition(s string) (ast.Term, error) {
+	switch {
+	case strings.HasPrefix(s, "if "):
+		s = s[3:]
+	case strings.HasPrefix(s, "and "):
+		s = s[4:]
+	default:
+		return nil, fmt.Errorf("the condition %s starts with neither if nor and", s)
 	}
-	s.id = strings.Join(ids, " ")
-	if r.problem != "" {
-		s.problem = r.problem
-		return s
+	negated := strings.HasPrefix(s, "not ")
+	if negated {
+		s = s[4:]
 	}
-	h, err := parseAtom(r.lines[0])
+	t, err := parseLine(s)
+	if err != nil || !negated {
+		return t, err
+	}
+	a, ok := t.(ast.Atom)
+	if !ok || a.Predicate.IsBuiltin() {
+		return nil, fmt.Errorf("%s cannot be negated", s)
+	}
+	return ast.NegAtom{Atom: a}, nil
+}
+
+func parseLine(s string) (ast.Term, error) {
+	parts, err := splitParts(s)
 	if err != nil {
-		s.problem = err.Error()
-		return s
+		return nil, err
 	}
-	s.head = h
-	for _, l := range r.lines[1:] {
-		t := strings.TrimLeft(l, " \t")
-		if strings.HasPrefix(t, "if ") {
-			t = t[3:]
-		} else {
-			t = t[4:]
+	if len(parts) == 1 {
+		p := parts[0]
+		if p.quoted || !wordsPattern.MatchString(p.text) {
+			return nil, fmt.Errorf("%s is neither a name in lowercase words nor a line of three or more parts", s)
 		}
-		negated := strings.HasPrefix(t, "not ")
-		if negated {
-			t = t[4:]
+		return ast.Atom{Predicate: symbolOf(p.text, 0)}, nil
+	}
+	if len(parts) == 2 {
+		return nil, fmt.Errorf("%s has two parts, and a line has one part or three or more", s)
+	}
+	verb := parts[1]
+	if verb.quoted || !wordsPattern.MatchString(verb.text) {
+		return nil, fmt.Errorf("the verb %s of %s is not in lowercase words", verb.text, s)
+	}
+	var args []ast.BaseTerm
+	for i, p := range parts {
+		if i == 1 {
+			continue
 		}
-		c, err := parseAtom(t)
+		t, err := toTerm(p)
 		if err != nil {
-			s.problem = err.Error()
-			return s
+			return nil, err
 		}
-		c.negated = negated
-		s.conds = append(s.conds, c)
+		args = append(args, t)
 	}
-	s.ok = true
-	return s
+	if name, ok := builtinVerbs[verb.text]; ok {
+		if len(args) != 2 {
+			return nil, fmt.Errorf("%s needs exactly one thing on each side of %s", s, verb.text)
+		}
+		return ast.Atom{Predicate: ast.PredicateSym{Symbol: name, Arity: 2}, Args: args}, nil
+	}
+	switch {
+	case verb.text == differsVerb:
+		if len(args) != 2 {
+			return nil, fmt.Errorf("%s needs exactly one thing on each side of %s", s, verb.text)
+		}
+		return ast.Ineq{Left: args[0], Right: args[1]}, nil
+	case verb.text == joinVerb:
+		rest := args[1:]
+		return ast.Eq{Left: args[0], Right: ast.ApplyFn{Function: ast.FunctionSym{Symbol: concatName, Arity: len(rest)}, Args: rest}}, nil
+	case verb.text == "is" && len(parts) == 3 && !parts[2].quoted && wordsPattern.MatchString(parts[2].text):
+		return ast.Atom{Predicate: symbolOf(parts[2].text, 1), Args: args[:1]}, nil
+	}
+	return ast.Atom{Predicate: symbolOf(verb.text, len(args)), Args: args}, nil
 }
 
 func splitParts(s string) ([]part, error) {
 	var parts []part
 	i := 0
 	for {
+		for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+			i++
+		}
 		if i < len(s) && (s[i] == '"' || s[i] == '\'') {
 			q := s[i]
+			i++
 			var b strings.Builder
-			j := i + 1
 			closed := false
-			for j < len(s) {
-				c := s[j]
-				if c == '\\' && j+1 < len(s) {
-					switch s[j+1] {
+			for i < len(s) {
+				c := s[i]
+				if c == '\\' && i+1 < len(s) {
+					switch s[i+1] {
 					case 'n':
 						b.WriteByte('\n')
 					case 't':
@@ -329,12 +344,12 @@ func splitParts(s string) ([]part, error) {
 					case 'r':
 						b.WriteByte('\r')
 					default:
-						b.WriteByte(s[j+1])
+						b.WriteByte(s[i+1])
 					}
-					j += 2
+					i += 2
 					continue
 				}
-				j++
+				i++
 				if c == q {
 					closed = true
 					break
@@ -342,126 +357,56 @@ func splitParts(s string) ([]part, error) {
 				b.WriteByte(c)
 			}
 			if !closed {
-				return nil, fmt.Errorf("%s has a quote that is never closed", s)
+				return nil, fmt.Errorf("a quote in %s is never closed", s)
 			}
-			parts = append(parts, part{b.String(), true})
-			if j == len(s) {
-				return parts, nil
+			for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
+				i++
 			}
-			if !strings.HasPrefix(s[j:], ", ") {
-				return nil, fmt.Errorf("%s has more after a closing quote than a comma", s)
+			if i < len(s) && s[i] != ',' {
+				return nil, fmt.Errorf("a closing quote in %s is followed by more text", s)
 			}
-			i = j + 2
-			continue
+			parts = append(parts, part{text: b.String(), quoted: true})
+		} else {
+			j := strings.IndexByte(s[i:], ',')
+			end := len(s)
+			if j >= 0 {
+				end = i + j
+			}
+			text := strings.TrimSpace(s[i:end])
+			if text == "" {
+				return nil, fmt.Errorf("%s has an empty part", s)
+			}
+			parts = append(parts, part{text: text})
+			i = end
 		}
-		n := strings.Index(s[i:], ", ")
-		if n < 0 {
-			return append(parts, part{s[i:], false}), nil
+		if i >= len(s) {
+			return parts, nil
 		}
-		parts = append(parts, part{s[i : i+n], false})
-		i += n + 2
+		i++
+		if strings.TrimSpace(s[i:]) == "" {
+			return nil, fmt.Errorf("%s ends with a comma", s)
+		}
 	}
 }
 
-func parseValue(p part) (value, error) {
+func toTerm(p part) (ast.BaseTerm, error) {
 	if p.quoted {
-		return value{kind: textValue, text: p.text}, nil
+		return ast.String(p.text), nil
 	}
-	t := p.text
-	if blankShaped(t) {
-		w := t[1 : len(t)-1]
-		if !blankPattern.MatchString(w) {
-			return value{}, fmt.Errorf("%s is not a blank, which is lowercase words in brackets", t)
+	if m := blankPattern.FindStringSubmatch(p.text); m != nil {
+		if !wordsPattern.MatchString(m[1]) {
+			return nil, fmt.Errorf("the blank %s is not named in lowercase words", p.text)
 		}
-		return value{kind: blankValue, text: w}, nil
+		return ast.Variable{Symbol: camel(m[1])}, nil
 	}
-	if numberPattern.MatchString(t) {
-		n, err := strconv.ParseInt(t, 10, 64)
+	if numberPattern.MatchString(p.text) {
+		n, err := strconv.ParseInt(p.text, 10, 64)
 		if err != nil {
-			return value{}, fmt.Errorf("%s is too big a number", t)
+			return nil, fmt.Errorf("the number %s is too large", p.text)
 		}
-		return value{kind: numberValue, num: n}, nil
+		return ast.Number(n), nil
 	}
-	return value{kind: textValue, text: t}, nil
-}
-
-func blankShaped(t string) bool {
-	return strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") && strings.Count(t, "[") == 1 && strings.Count(t, "]") == 1
-}
-
-func parseAtom(s string) (atom, error) {
-	parts, err := splitParts(s)
-	if err != nil {
-		return atom{}, err
-	}
-	switch len(parts) {
-	case 1:
-		if parts[0].quoted || !wordsPattern.MatchString(parts[0].text) {
-			return atom{}, fmt.Errorf("%s is one part, so it must be a sentence of lowercase words", s)
-		}
-		return atom{pred: parts[0].text}, nil
-	case 2:
-		return atom{}, fmt.Errorf("%s has two parts, and a line has one part, or three or more", s)
-	}
-	verb := parts[1]
-	if verb.quoted || !wordsPattern.MatchString(verb.text) {
-		return atom{}, fmt.Errorf("in %s the verb %s is not lowercase words", s, verb.text)
-	}
-	var args []value
-	for _, p := range append([]part{parts[0]}, parts[2:]...) {
-		v, err := parseValue(p)
-		if err != nil {
-			return atom{}, err
-		}
-		args = append(args, v)
-	}
-	if verb.text == "is" {
-		o := parts[2]
-		if len(parts) != 3 || o.quoted || !wordsPattern.MatchString(o.text) {
-			return atom{}, fmt.Errorf("in %s, is must be followed by one name of lowercase words", s)
-		}
-		return atom{verb: "is", pred: o.text, args: args[:1]}, nil
-	}
-	return atom{verb: verb.text, pred: verb.text, args: args}, nil
-}
-
-func parsePattern(t string) (atom, error) {
-	locs := slotPattern.FindAllStringIndex(t, -1)
-	if len(locs) == 0 {
-		return parseAtom(t)
-	}
-	fail := fmt.Errorf("%s is not a fact pattern, which starts with a slot and puts its verb after it", t)
-	if locs[0][0] != 0 {
-		return atom{}, fail
-	}
-	parts := []string{t[:locs[0][1]]}
-	if len(locs) == 1 {
-		rest := t[locs[0][1]:]
-		if !strings.HasPrefix(rest, " is ") {
-			return atom{}, fail
-		}
-		parts = append(parts, "is", rest[4:])
-	} else {
-		verb := t[locs[0][1]:locs[1][0]]
-		if len(verb) < 3 || verb[0] != ' ' || verb[len(verb)-1] != ' ' {
-			return atom{}, fail
-		}
-		parts = append(parts, verb[1:len(verb)-1])
-		for i := 1; i < len(locs); i++ {
-			if i > 1 && t[locs[i-1][1]:locs[i][0]] != " " {
-				return atom{}, fail
-			}
-			parts = append(parts, t[locs[i][0]:locs[i][1]])
-		}
-		if locs[len(locs)-1][1] != len(t) {
-			return atom{}, fail
-		}
-	}
-	return parseAtom(strings.Join(parts, ", "))
-}
-
-func mangleName(pred string) string {
-	return strings.ReplaceAll(pred, " ", "_")
+	return ast.String(p.text), nil
 }
 
 func camel(words string) string {
@@ -475,8 +420,8 @@ func camel(words string) string {
 func uncamel(name string) string {
 	var words []string
 	start := 0
-	for i, r := range name {
-		if i > 0 && unicode.IsUpper(r) {
+	for i := 1; i < len(name); i++ {
+		if name[i] >= 'A' && name[i] <= 'Z' {
 			words = append(words, strings.ToLower(name[start:i]))
 			start = i
 		}
@@ -485,271 +430,111 @@ func uncamel(name string) string {
 	return strings.Join(words, " ")
 }
 
-func mangleValue(v value) string {
-	switch v.kind {
-	case blankValue:
-		return camel(v.text)
-	case numberValue:
-		return ast.Number(v.num).String()
-	}
-	return ast.String(v.text).String()
+func symbolOf(words string, arity int) ast.PredicateSym {
+	return ast.PredicateSym{Symbol: strings.ReplaceAll(words, " ", "_"), Arity: arity}
 }
 
-func (a atom) mangle() string {
-	var s string
-	if a.tpl != nil {
-		s = a.tpl.fill(a.args)
-	} else {
-		args := make([]string, len(a.args))
-		for i, v := range a.args {
-			args[i] = mangleValue(v)
-		}
-		s = mangleName(a.pred) + "(" + strings.Join(args, ", ") + ")"
-	}
-	if a.negated {
-		s = "!" + s
-	}
-	return s
+func wordsOf(sym ast.PredicateSym) string {
+	return strings.ReplaceAll(sym.Symbol, "_", " ")
 }
 
-func (s *statement) mangle() string {
-	text := s.head.mangle()
-	if len(s.conds) > 0 {
-		conds := make([]string, len(s.conds))
-		for i, c := range s.conds {
-			conds[i] = c.mangle()
-		}
-		text += " :- " + strings.Join(conds, ", ")
-	}
-	return text + "."
+func fact(words string, args ...ast.BaseTerm) ast.Atom {
+	return ast.Atom{Predicate: symbolOf(words, len(args)), Args: args}
 }
 
-func templateKey(verb string, arity int) string {
-	return verb + "/" + strconv.Itoa(arity)
+func stringOf(b ast.BaseTerm) (string, bool) {
+	c, ok := b.(ast.Constant)
+	if !ok || c.Type != ast.StringType {
+		return "", false
+	}
+	return c.Symbol, true
 }
 
-func (t *template) fill(args []value) string {
-	toks := mangleTokens(t.text)
-	for i, tok := range toks {
-		if n, ok := placeholderNumber(tok); ok && n <= len(args) {
-			toks[i] = mangleValue(args[n-1])
-		}
+func textOf(b ast.BaseTerm) (string, bool) {
+	c, ok := b.(ast.Constant)
+	if !ok {
+		return "", false
 	}
-	return strings.Join(toks, "")
+	switch c.Type {
+	case ast.StringType:
+		return c.Symbol, true
+	case ast.NumberType:
+		return strconv.FormatInt(c.NumValue, 10), true
+	}
+	return "", false
 }
 
-func placeholderNumber(s string) (int, bool) {
-	if !strings.HasPrefix(s, placeholder) {
-		return 0, false
+func mangleBase(b ast.BaseTerm) string {
+	switch x := b.(type) {
+	case ast.Variable:
+		return x.Symbol
+	case ast.ApplyFn:
+		var args []string
+		for _, a := range x.Args {
+			args = append(args, mangleBase(a))
+		}
+		return x.Function.Symbol + "(" + strings.Join(args, ", ") + ")"
 	}
-	n, err := strconv.Atoi(s[len(placeholder):])
-	return n, err == nil && n > 0
+	return b.String()
 }
 
-func mangleTokens(s string) []string {
-	var toks []string
-	for i := 0; i < len(s); {
-		j := i + 1
-		switch c := s[i]; {
-		case c == '"':
-			for j < len(s) && s[j] != '"' {
-				if s[j] == '\\' {
-					j++
-				}
-				j++
-			}
-			j++
-			if j > len(s) {
-				j = len(s)
-			}
-		case isWordByte(c):
-			for j < len(s) && isWordByte(s[j]) {
-				j++
-			}
-		}
-		toks = append(toks, s[i:j])
-		i = j
-	}
-	return toks
-}
-
-func isWordByte(c byte) bool {
-	return c == '_' || c == ':' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
-}
-
-func (k *knower) learnTemplates() {
-	for _, s := range k.statements {
-		if !s.ok || len(s.conds) > 0 || s.head.verb != "means in mangle" || len(s.head.args) != 2 {
-			continue
-		}
-		l, m := s.head.args[0], s.head.args[1]
-		if l.kind != textValue || m.kind != textValue {
-			continue
-		}
-		k.learn(s, l.text, m.text)
-	}
-}
-
-func (k *knower) learn(s *statement, line, m string) {
-	a, err := parseAtom(line)
-	if err != nil {
-		k.problemAt(s, fmt.Sprintf("%s can't mean anything in mangle: %v", line, err))
-		return
-	}
-	plain := a.mangle() + "."
-	if plain == m {
-		return
-	}
-	if strings.HasSuffix(m, ".") || a.verb == "" || a.verb == "is" {
-		k.problemAt(s, fmt.Sprintf("%s means %s in mangle, but engine.go writes it as %s", line, m, plain))
-		return
-	}
-	renders := make([]string, len(a.args))
-	for i, v := range a.args {
-		renders[i] = mangleValue(v)
-		for j := 0; j < i; j++ {
-			if renders[j] == renders[i] {
-				k.problemAt(s, fmt.Sprintf("%s uses %s twice, so engine.go can't learn from it", line, renders[i]))
-				return
-			}
-		}
-	}
-	toks := mangleTokens(m)
-	used := make([]bool, len(renders))
-	for i, tok := range toks {
-		for j, r := range renders {
-			if tok == r {
-				toks[i] = placeholder + strconv.Itoa(j+1)
-				used[j] = true
-				break
-			}
-		}
-	}
-	for j, u := range used {
-		if !u {
-			k.problemAt(s, fmt.Sprintf("%s means %s in mangle, which leaves out %s", line, m, renders[j]))
-			return
-		}
-	}
-	text := strings.Join(toks, "")
-	term, err := parse.LiteralOrFormula(text)
-	if err != nil {
-		k.problemAt(s, fmt.Sprintf("%s means %s in mangle, which mangle can't read as a condition", line, m))
-		return
-	}
-	key := templateKey(a.verb, len(a.args))
-	if old, ok := k.templates[key]; ok {
-		if old.text != text {
-			k.problemAt(s, fmt.Sprintf("%s means %s in mangle, but %s already means something else", line, m, a.verb))
-		}
-		return
-	}
-	k.templates[key] = &template{verb: a.verb, arity: len(a.args), text: text, term: term}
-	k.templateOrder = append(k.templateOrder, key)
-}
-
-func (k *knower) templateFor(a atom) *template {
-	if a.verb == "" || a.verb == "is" {
-		return nil
-	}
-	return k.templates[templateKey(a.verb, len(a.args))]
-}
-
-func (k *knower) resolve(s *statement) bool {
-	if k.templateFor(s.head) != nil {
-		k.problemAt(s, fmt.Sprintf("%s is only ever a condition", s.head.verb))
-		return false
-	}
-	for i := range s.conds {
-		c := &s.conds[i]
-		t := k.templateFor(*c)
-		if t == nil {
-			continue
-		}
-		if c.negated {
-			k.problemAt(s, fmt.Sprintf("engine.go can't put not before %s", c.verb))
-			return false
-		}
-		c.tpl = t
-	}
-	return true
-}
-
-func (k *knower) translate() {
-	for i, s := range k.statements {
-		if !s.ok || !k.resolve(s) {
-			continue
-		}
-		text := s.mangle()
-		c, err := parse.Clause(text)
-		if err != nil {
-			k.problemAt(s, fmt.Sprintf("engine.go writes it in mangle as %s, which mangle can't read", text))
-			continue
-		}
-		s.clause = c
-		s.translated = true
-		back, err := k.plainClause(c)
-		if err == nil {
-			s.readBack = back
-		}
-		s.differs = err != nil || back != strings.Join(s.lines, "\n")
-		if err := checkAlone(c); err != nil {
-			k.problemAt(s, fmt.Sprintf("mangle can't use it: %v", err))
-		} else {
-			s.usable = true
-		}
-		if len(s.conds) == 0 {
-			key := c.Head.String()
-			if _, ok := k.order[key]; !ok {
-				k.order[key] = i
-				k.written[key] = s.file
-			}
-		}
-	}
-}
-
-func premiseAtom(p ast.Term) (ast.Atom, bool) {
-	switch v := p.(type) {
+func mangleTerm(t ast.Term) string {
+	switch x := t.(type) {
 	case ast.Atom:
-		return v, !strings.HasPrefix(v.Predicate.Symbol, ":")
+		var args []string
+		for _, a := range x.Args {
+			args = append(args, mangleBase(a))
+		}
+		return x.Predicate.Symbol + "(" + strings.Join(args, ", ") + ")"
 	case ast.NegAtom:
-		return v.Atom, !strings.HasPrefix(v.Atom.Predicate.Symbol, ":")
+		return "!" + mangleTerm(x.Atom)
+	case ast.Eq:
+		return mangleBase(x.Left) + " = " + mangleBase(x.Right)
+	case ast.Ineq:
+		return mangleBase(x.Left) + " != " + mangleBase(x.Right)
 	}
-	return ast.Atom{}, false
+	return t.String()
 }
 
-func checkAlone(c ast.Clause) error {
-	extras := map[ast.PredicateSym]ast.Decl{}
-	for _, p := range c.Premises {
-		if a, ok := premiseAtom(p); ok && a.Predicate != c.Head.Predicate {
-			extras[a.Predicate] = ast.NewSyntheticDeclFromSym(a.Predicate)
-		}
+func mangleLine(t ast.Term) string {
+	if a, ok := t.(ast.Atom); ok && !a.Predicate.IsBuiltin() {
+		return mangleTerm(t) + "."
 	}
-	_, err := analysis.AnalyzeOneUnit(parse.SourceUnit{Clauses: []ast.Clause{c}}, extras)
-	return err
+	return mangleTerm(t)
+}
+
+func mangleRule(head ast.Atom, body []ast.Term) string {
+	if len(body) == 0 {
+		return mangleTerm(head) + "."
+	}
+	var conditions []string
+	for _, t := range body {
+		conditions = append(conditions, mangleTerm(t))
+	}
+	return mangleTerm(head) + " :- " + strings.Join(conditions, ", ") + "."
 }
 
 func needsQuotes(s string) bool {
 	switch {
-	case s == "", strings.TrimSpace(s) != s, strings.Contains(s, ", "):
+	case s == "", strings.TrimSpace(s) != s, strings.ContainsAny(s, ",\n\r\t"):
 		return true
-	case strings.HasPrefix(s, "\""), strings.HasPrefix(s, "'"), strings.HasPrefix(s, "not "):
+	case s[0] == '"' || s[0] == '\'':
 		return true
-	case strings.ContainsAny(s, "\n\r\t"), numberPattern.MatchString(s), blankShaped(s):
+	case blankPattern.MatchString(s), numberPattern.MatchString(s), strings.HasPrefix(s, "not "):
 		return true
 	}
 	return false
 }
 
 func quote(s string) string {
-	q := byte('"')
-	if strings.Contains(s, "\"") && !strings.Contains(s, "'") {
+	q := '"'
+	if strings.ContainsRune(s, '"') && !strings.ContainsRune(s, '\'') {
 		q = '\''
 	}
 	var b strings.Builder
-	b.WriteByte(q)
-	for i := 0; i < len(s); i++ {
-		switch c := s[i]; c {
+	b.WriteRune(q)
+	for _, r := range s {
+		switch r {
 		case '\\':
 			b.WriteString(`\\`)
 		case '\n':
@@ -759,663 +544,592 @@ func quote(s string) string {
 		case '\r':
 			b.WriteString(`\r`)
 		case q:
-			b.WriteByte('\\')
-			b.WriteByte(c)
+			b.WriteRune('\\')
+			b.WriteRune(r)
 		default:
-			b.WriteByte(c)
+			b.WriteRune(r)
 		}
 	}
-	b.WriteByte(q)
+	b.WriteRune(q)
 	return b.String()
 }
 
-func plainText(s string) string {
+func writeValue(s string) string {
 	if needsQuotes(s) {
 		return quote(s)
 	}
 	return s
 }
 
-func plainTerm(t ast.BaseTerm) (string, error) {
-	switch v := t.(type) {
+func plainValue(b ast.BaseTerm) (string, error) {
+	switch x := b.(type) {
 	case ast.Variable:
-		return "[" + uncamel(v.Symbol) + "]", nil
+		return "[" + uncamel(x.Symbol) + "]", nil
 	case ast.Constant:
-		switch v.Type {
+		switch x.Type {
 		case ast.StringType:
-			return plainText(v.Symbol), nil
+			return writeValue(x.Symbol), nil
 		case ast.NumberType:
-			return ast.FormatNumber(v.NumValue), nil
+			return strconv.FormatInt(x.NumValue, 10), nil
 		}
+	}
+	return "", fmt.Errorf("%v has no plain form", b)
+}
+
+func plainValues(args []ast.BaseTerm) ([]string, error) {
+	var out []string
+	for _, a := range args {
+		v, err := plainValue(a)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+func plainTerm(t ast.Term) (string, error) {
+	switch x := t.(type) {
+	case ast.NegAtom:
+		s, err := plainTerm(x.Atom)
+		return "not " + s, err
+	case ast.Ineq:
+		v, err := plainValues([]ast.BaseTerm{x.Left, x.Right})
+		if err != nil {
+			return "", err
+		}
+		return v[0] + ", " + differsVerb + ", " + v[1], nil
+	case ast.Eq:
+		fn, ok := x.Right.(ast.ApplyFn)
+		if !ok || fn.Function.Symbol != concatName {
+			return "", fmt.Errorf("%v has no plain form", t)
+		}
+		v, err := plainValues(append([]ast.BaseTerm{x.Left}, fn.Args...))
+		if err != nil {
+			return "", err
+		}
+		return v[0] + ", " + joinVerb + ", " + strings.Join(v[1:], ", "), nil
+	case ast.Atom:
+		v, err := plainValues(x.Args)
+		if err != nil {
+			return "", err
+		}
+		if x.Predicate.IsBuiltin() {
+			for verb, name := range builtinVerbs {
+				if name == x.Predicate.Symbol && len(v) == 2 {
+					return v[0] + ", " + verb + ", " + v[1], nil
+				}
+			}
+			return "", fmt.Errorf("%v has no plain form", t)
+		}
+		words := wordsOf(x.Predicate)
+		if !wordsPattern.MatchString(words) {
+			return "", fmt.Errorf("%v has no plain form", t)
+		}
+		switch len(v) {
+		case 0:
+			return words, nil
+		case 1:
+			return v[0] + ", is, " + words, nil
+		}
+		if words == "is" && len(v) == 2 {
+			if s, ok := stringOf(x.Args[1]); ok && wordsPattern.MatchString(s) {
+				v[1] = quote(s)
+			}
+		}
+		return v[0] + ", " + words + ", " + strings.Join(v[1:], ", "), nil
 	}
 	return "", fmt.Errorf("%v has no plain form", t)
 }
 
-func constText(t ast.BaseTerm) string {
-	if c, ok := t.(ast.Constant); ok {
-		switch c.Type {
-		case ast.StringType:
-			return c.Symbol
-		case ast.NumberType:
-			return ast.FormatNumber(c.NumValue)
-		}
+func plainRule(c ast.Clause) ([]string, error) {
+	head, err := plainTerm(c.Head)
+	if err != nil {
+		return nil, err
 	}
-	return t.String()
-}
-
-func plainLine(words string, args []string) string {
-	switch len(args) {
-	case 0:
-		return words
-	case 1:
-		return args[0] + ", is, " + words
-	}
-	return args[0] + ", " + words + ", " + strings.Join(args[1:], ", ")
-}
-
-func (k *knower) plainAtom(a ast.Atom) (string, error) {
-	if strings.HasPrefix(a.Predicate.Symbol, ":") {
-		return k.plainBuiltin(a)
-	}
-	args := make([]string, len(a.Args))
-	for i, t := range a.Args {
-		s, err := plainTerm(t)
+	lines := []string{head}
+	for i, p := range c.Premises {
+		s, err := plainTerm(p)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		args[i] = s
-	}
-	return plainLine(strings.ReplaceAll(a.Predicate.Symbol, "_", " "), args), nil
-}
-
-func (k *knower) plainPremise(p ast.Term) (string, error) {
-	switch v := p.(type) {
-	case ast.Atom:
-		return k.plainAtom(v)
-	case ast.NegAtom:
-		s, err := k.plainAtom(v.Atom)
-		return "not " + s, err
-	}
-	return k.plainBuiltin(p)
-}
-
-func (k *knower) plainBuiltin(p ast.Term) (string, error) {
-	for _, key := range k.templateOrder {
-		t := k.templates[key]
-		binds := map[int]ast.BaseTerm{}
-		if !matchTerm(t.term, p, binds) || len(binds) != t.arity {
-			continue
+		keyword := "    and "
+		if i == 0 {
+			keyword = "    if "
 		}
-		args := make([]string, t.arity)
-		for i := range args {
-			s, err := plainTerm(binds[i+1])
-			if err != nil {
-				return "", err
-			}
-			args[i] = s
-		}
-		return args[0] + ", " + t.verb + ", " + strings.Join(args[1:], ", "), nil
+		lines = append(lines, keyword+s)
 	}
-	return "", fmt.Errorf("%v has no plain form", p)
+	return lines, nil
 }
 
-func matchTerm(t, a ast.Term, binds map[int]ast.BaseTerm) bool {
-	switch tt := t.(type) {
-	case ast.Atom:
-		aa, ok := a.(ast.Atom)
-		return ok && aa.Predicate == tt.Predicate && matchArgs(tt.Args, aa.Args, binds)
-	case ast.Eq:
-		aa, ok := a.(ast.Eq)
-		return ok && matchBase(tt.Left, aa.Left, binds) && matchBase(tt.Right, aa.Right, binds)
-	case ast.Ineq:
-		aa, ok := a.(ast.Ineq)
-		return ok && matchBase(tt.Left, aa.Left, binds) && matchBase(tt.Right, aa.Right, binds)
-	}
-	return false
-}
-
-func matchArgs(ts, as []ast.BaseTerm, binds map[int]ast.BaseTerm) bool {
-	if len(ts) != len(as) {
+func (r *rule) prepare(problems *problemList) bool {
+	text := mangleRule(r.head, r.body)
+	c, err := parse.Clause(text)
+	if err != nil {
+		problems.add(fmt.Sprintf("%s means %s in mangle, which mangle cannot read: %v", r.id, text, err))
 		return false
 	}
-	for i := range ts {
-		if !matchBase(ts[i], as[i], binds) {
+	r.clause = c
+	r.ready = true
+	back, err := plainRule(c)
+	return err != nil || strings.Join(back, "\n") != strings.Join(r.text, "\n")
+}
+
+func termVariables(t ast.Term, add func(ast.Variable)) {
+	var base func(b ast.BaseTerm)
+	base = func(b ast.BaseTerm) {
+		switch x := b.(type) {
+		case ast.Variable:
+			add(x)
+		case ast.ApplyFn:
+			for _, a := range x.Args {
+				base(a)
+			}
+		}
+	}
+	switch x := t.(type) {
+	case ast.Atom:
+		for _, a := range x.Args {
+			base(a)
+		}
+	case ast.NegAtom:
+		termVariables(x.Atom, add)
+	case ast.Eq:
+		base(x.Left)
+		base(x.Right)
+	case ast.Ineq:
+		base(x.Left)
+		base(x.Right)
+	}
+}
+
+func patternPredicate(p string) (string, int) {
+	slots := slotPattern.FindAllString(p, -1)
+	text := strings.Join(strings.Fields(slotPattern.ReplaceAllString(p, " ")), " ")
+	if len(slots) == 1 && strings.HasPrefix(p, "[") && strings.HasPrefix(text, "is ") {
+		return text[3:], 1
+	}
+	return text, len(slots)
+}
+
+func observe(rules []*rule, readBack []string, change bool) []ast.Atom {
+	var out []ast.Atom
+	patterns := map[string]bool{}
+	for _, r := range rules {
+		if !r.ready {
+			continue
+		}
+		head := r.clause.Head
+		words := wordsOf(head.Predicate)
+		id := ast.String(r.id)
+		out = append(out, fact("has a rule for", ast.String(r.file), ast.String(words)))
+		out = append(out, fact("defines", id, ast.String(words)))
+		blanks := map[string]bool{}
+		addBlank := func(v ast.Variable) {
+			blanks[uncamel(v.Symbol)] = true
+		}
+		termVariables(head, addBlank)
+		for _, p := range r.clause.Premises {
+			termVariables(p, addBlank)
+			var a ast.Atom
+			switch x := p.(type) {
+			case ast.Atom:
+				a = x
+			case ast.NegAtom:
+				a = x.Atom
+			default:
+				continue
+			}
+			if !a.Predicate.IsBuiltin() {
+				out = append(out, fact("refers to", id, ast.String(wordsOf(a.Predicate))))
+			}
+		}
+		for blank := range blanks {
+			out = append(out, fact("has the blank", id, ast.String(blank)))
+		}
+		if head.Predicate == symbolOf("breaks", 2) {
+			if law, ok := stringOf(head.Args[1]); ok {
+				out = append(out, fact("lays down", id, ast.String(law)))
+			}
+		}
+		if patternVerbs[words] && head.Predicate.Arity == 2 {
+			if p, ok := stringOf(head.Args[1]); ok {
+				patterns[p] = true
+			}
+		}
+	}
+	for p := range patterns {
+		words, _ := patternPredicate(p)
+		out = append(out, fact("names", ast.String(p), ast.String(words)))
+		for _, m := range slotPattern.FindAllStringSubmatch(p, -1) {
+			out = append(out, fact("has the slot", ast.String(p), ast.String(m[1])))
+		}
+	}
+	for _, id := range readBack {
+		out = append(out, fact("read back differently", ast.String(id)))
+	}
+	if change {
+		out = append(out, fact("this run is a change"))
+	}
+	return out
+}
+
+func statedOrder(rules []*rule) map[string]int {
+	order := map[string]int{}
+	for i, r := range rules {
+		if !r.ready || len(r.clause.Premises) > 0 {
+			continue
+		}
+		key := r.clause.Head.String()
+		if _, ok := order[key]; !ok {
+			order[key] = i
+		}
+	}
+	return order
+}
+
+func premiseSymbol(t ast.Term) (ast.PredicateSym, bool) {
+	switch x := t.(type) {
+	case ast.Atom:
+		return x.Predicate, !x.Predicate.IsBuiltin()
+	case ast.NegAtom:
+		return x.Atom.Predicate, !x.Atom.Predicate.IsBuiltin()
+	}
+	return ast.PredicateSym{}, false
+}
+
+func evaluate(rules []*rule, facts []ast.Atom, problems *problemList) factstore.SimpleInMemoryStore {
+	var clauses []ast.Clause
+	defined := map[ast.PredicateSym]bool{}
+	for _, r := range rules {
+		if r.ready {
+			clauses = append(clauses, r.clause)
+			defined[r.clause.Head.Predicate] = true
+		}
+	}
+	for _, f := range facts {
+		clauses = append(clauses, ast.Clause{Head: f})
+		defined[f.Predicate] = true
+	}
+	extra := map[ast.PredicateSym]ast.Decl{}
+	for _, c := range clauses {
+		for _, p := range c.Premises {
+			if sym, ok := premiseSymbol(p); ok && !defined[sym] {
+				extra[sym] = ast.NewSyntheticDeclFromSym(sym)
+			}
+		}
+	}
+	store := factstore.NewSimpleInMemoryStore()
+	info, err := analysis.AnalyzeOneUnit(parse.SourceUnit{Clauses: clauses}, extra)
+	if err == nil {
+		err = engine.EvalProgram(info, store)
+	}
+	if err != nil {
+		problems.add(fmt.Sprintf("mangle cannot run the knowledge: %v", err))
+		for _, c := range clauses {
+			if len(c.Premises) == 0 && ground(c.Head) {
+				store.Add(c.Head)
+			}
+		}
+	}
+	return store
+}
+
+func ground(a ast.Atom) bool {
+	for _, arg := range a.Args {
+		if _, ok := arg.(ast.Constant); !ok {
 			return false
 		}
 	}
 	return true
 }
 
-func matchBase(t, a ast.BaseTerm, binds map[int]ast.BaseTerm) bool {
-	switch tt := t.(type) {
-	case ast.Variable:
-		if n, ok := placeholderNumber(tt.Symbol); ok {
-			if old, ok := binds[n]; ok {
-				return old.Equals(a)
-			}
-			binds[n] = a
-			return true
-		}
-	case ast.ApplyFn:
-		aa, ok := a.(ast.ApplyFn)
-		return ok && aa.Function.Symbol == tt.Function.Symbol && matchArgs(tt.Args, aa.Args, binds)
-	}
-	return t.Equals(a)
-}
-
-func (k *knower) plainClause(c ast.Clause) (string, error) {
-	head, err := k.plainAtom(c.Head)
-	if err != nil {
-		return "", err
-	}
-	lines := []string{head}
-	for i, p := range c.Premises {
-		s, err := k.plainPremise(p)
-		if err != nil {
-			return "", err
-		}
-		lead := "    and "
-		if i == 0 {
-			lead = "    if "
-		}
-		lines = append(lines, lead+s)
-	}
-	return strings.Join(lines, "\n"), nil
-}
-
-func slotBase(w string) string {
-	for _, p := range []string{"any ", "other "} {
-		if strings.HasPrefix(w, p) {
-			return w[len(p):]
-		}
-	}
-	return w
-}
-
-func (k *knower) describe() {
-	var atoms []atom
-	var where []*statement
-	for _, s := range k.statements {
-		if !s.translated {
-			continue
-		}
-		k.fact("has a rule for", s.file, s.head.pred)
-		k.fact("defines", s.id, s.head.pred)
-		for _, c := range s.conds {
-			if c.tpl == nil {
-				k.fact("refers to", s.id, c.pred)
-			}
-		}
-		if h := s.head; h.verb == "breaks" && len(h.args) >= 2 {
-			if law := h.args[len(h.args)-1]; law.kind == textValue {
-				k.fact("lays down", s.id, law.text)
-			}
-		}
-		for _, a := range append([]atom{s.head}, s.conds...) {
-			for _, v := range a.args {
-				if v.kind == blankValue {
-					k.fact("has the blank", s.id, v.text)
-				}
-			}
-			if a.tpl == nil {
-				atoms = append(atoms, a)
-				where = append(where, s)
-			}
-		}
-		if s.differs {
-			k.fact("read back differently", s.id)
-		}
-	}
-	k.findPatterns(atoms, where)
-}
-
-func (k *knower) findPatterns(atoms []atom, where []*statement) {
-	positions := map[position]bool{}
-	mark := func(a atom) bool {
-		grew := false
-		for i, v := range a.args {
-			if v.kind == blankValue && slotBase(v.text) == patternSlot {
-				p := position{a.pred, len(a.args), i}
-				if !positions[p] {
-					positions[p] = true
-					grew = true
-				}
-			}
-		}
-		return grew
-	}
-	for _, a := range atoms {
-		mark(a)
-	}
-	bad := map[string]bool{}
-	for grew := true; grew; {
-		grew = false
-		for n, a := range atoms {
-			for i, v := range a.args {
-				if v.kind != textValue || !positions[position{a.pred, len(a.args), i}] {
-					continue
-				}
-				if _, ok := k.patterns[v.text]; ok || bad[v.text] {
-					continue
-				}
-				p, err := parsePattern(v.text)
-				if err != nil {
-					bad[v.text] = true
-					k.problemAt(where[n], err.Error())
-					continue
-				}
-				k.patterns[v.text] = p
-				k.patternOrder = append(k.patternOrder, v.text)
-				if mark(p) {
-					grew = true
-				}
-			}
-		}
-	}
-	for _, t := range k.patternOrder {
-		p := k.patterns[t]
-		k.fact("names", t, p.pred)
-		for _, v := range p.args {
-			if v.kind == blankValue {
-				k.fact("has the slot", t, v.text)
-			}
-		}
-	}
-}
-
-func (k *knower) pattern(t string) (ast.PredicateSym, bool) {
-	p, ok := k.patterns[t]
-	if !ok {
-		var err error
-		if p, err = parsePattern(t); err != nil {
-			return ast.PredicateSym{}, false
-		}
-	}
-	return ast.PredicateSym{Symbol: mangleName(p.pred), Arity: len(p.args)}, true
-}
-
-func problemAtom(text string) ast.Atom {
-	return ast.NewAtom("a_problem", ast.String(text))
-}
-
-func (k *knower) evaluate(returned []ast.Atom) *outcome {
-	k.mu.Lock()
-	problems := append([]string(nil), k.problems...)
-	k.mu.Unlock()
-	o := &outcome{problems: len(problems)}
-	var clauses []ast.Clause
-	for _, s := range k.statements {
-		if s.usable {
-			clauses = append(clauses, s.clause)
-		}
-	}
-	for _, f := range k.facts {
-		clauses = append(clauses, ast.Clause{Head: f})
-	}
-	for _, p := range problems {
-		clauses = append(clauses, ast.Clause{Head: problemAtom(p)})
-	}
-	for _, f := range returned {
-		clauses = append(clauses, ast.Clause{Head: f})
-	}
-	defined := map[ast.PredicateSym]bool{}
-	for _, c := range clauses {
-		defined[c.Head.Predicate] = true
-	}
-	extras := map[ast.PredicateSym]ast.Decl{}
-	for _, c := range clauses {
-		for _, p := range c.Premises {
-			if a, ok := premiseAtom(p); ok && !defined[a.Predicate] {
-				extras[a.Predicate] = ast.NewSyntheticDeclFromSym(a.Predicate)
-			}
-		}
-	}
-	info, err := analysis.AnalyzeOneUnit(parse.SourceUnit{Clauses: clauses}, extras)
-	if err != nil {
-		o.err = err
-		return o
-	}
-	o.store = factstore.NewSimpleInMemoryStore()
-	rec := &recorder{events: map[string][]event{}}
-	if err := engine.EvalProgram(info, o.store, engine.WithDerivationRecorder(rec)); err != nil {
-		o.err = err
-		return o
-	}
-	o.events = rec.events
-	return o
-}
-
-func (o *outcome) get(sym ast.PredicateSym) []ast.Atom {
+func factsOf(store factstore.ReadOnlyFactStore, words string, arity int) []ast.Atom {
 	var out []ast.Atom
-	o.store.GetFacts(ast.NewQuery(sym), func(a ast.Atom) error {
+	store.GetFacts(ast.NewQuery(symbolOf(words, arity)), func(a ast.Atom) error {
 		out = append(out, a)
 		return nil
 	})
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
 	return out
 }
 
-func (k *knower) all(o *outcome, pred string, arity int) []ast.Atom {
-	return k.sorted(o.get(ast.PredicateSym{Symbol: mangleName(pred), Arity: arity}))
-}
-
-func (k *knower) rank(a ast.Atom) int {
-	if n, ok := k.order[a.String()]; ok {
-		return n
-	}
-	return len(k.statements)
-}
-
-func (k *knower) sorted(atoms []ast.Atom) []ast.Atom {
-	sort.SliceStable(atoms, func(i, j int) bool {
-		ri, rj := k.rank(atoms[i]), k.rank(atoms[j])
-		if ri != rj {
-			return ri < rj
-		}
-		return atoms[i].String() < atoms[j].String()
-	})
-	return atoms
-}
-
-func (k *knower) knowledgeOf(o *outcome) knowledge {
-	return func(pred string) [][]string {
-		var rows [][]string
-		name := mangleName(pred)
-		for _, sym := range o.store.ListPredicates() {
-			if sym.Symbol != name {
-				continue
-			}
-			for _, a := range k.sorted(o.get(sym)) {
-				row := make([]string, len(a.Args))
-				for i, t := range a.Args {
-					row[i] = constText(t)
-				}
-				rows = append(rows, row)
-			}
-		}
-		return rows
-	}
-}
-
-type call struct {
-	command string
-	tool    string
-	input   string
-}
-
-func (k *knower) run() *outcome {
-	done := map[call]bool{}
-	var returned []ast.Atom
-	for round := 0; ; round++ {
-		o := k.evaluate(returned)
-		if o.err != nil {
-			return o
-		}
-		var todo []call
-		for _, a := range k.all(o, "calls", 3) {
-			c := call{constText(a.Args[0]), constText(a.Args[1]), constText(a.Args[2])}
-			if !done[c] {
-				done[c] = true
-				todo = append(todo, c)
-			}
-		}
-		if len(todo) == 0 {
-			return o
-		}
-		if round == maxRounds {
-			k.addProblem(fmt.Sprintf("the commands kept coming for %d rounds", maxRounds))
-			return k.evaluate(returned)
-		}
-		know := k.knowledgeOf(o)
-		results := make([][]ast.Atom, len(todo))
-		var wg sync.WaitGroup
-		for i, c := range todo {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				out, err := runTool(c.tool, c.input, know)
-				if err != nil {
-					k.addProblem(fmt.Sprintf("%s calls %s with %s, which fails: %v", c.command, c.tool, c.input, err))
-				}
-				for _, r := range out {
-					v := ast.BaseTerm(ast.String(r.text))
-					if r.isNum {
-						v = ast.Number(r.num)
-					}
-					results[i] = append(results[i], ast.NewAtom("returned", ast.String(c.command), ast.String(r.field), v))
-				}
-			}()
-		}
-		wg.Wait()
-		for _, r := range results {
-			returned = append(returned, r...)
-		}
-	}
-}
-
-func (k *knower) reasons(o *outcome, f ast.Atom) []string {
+func textsOf(store factstore.ReadOnlyFactStore, words, subject string) []string {
 	var out []string
-	seen := map[string]bool{}
-	for _, ev := range o.events[f.String()] {
-		var parts []string
-		for _, p := range ev.clause.Premises {
-			s, err := k.plainPremise(p.ApplySubst(ev.subst))
-			if err != nil {
-				parts = nil
-				break
-			}
-			parts = append(parts, s)
+	for _, f := range factsOf(store, words, 2) {
+		who, ok1 := textOf(f.Args[0])
+		what, ok2 := textOf(f.Args[1])
+		if ok1 && ok2 && who == subject {
+			out = append(out, what)
 		}
-		if r := strings.Join(parts, " and "); r != "" && !seen[r] {
-			seen[r] = true
-			out = append(out, r)
-		}
-	}
-	if file, ok := k.written[f.String()]; ok {
-		out = append(out, "it is written in "+file)
 	}
 	return out
 }
 
-func (k *knower) finish(o *outcome) int {
-	if o.err != nil {
-		k.addProblem(fmt.Sprintf("mangle can't evaluate the knowledge: %v", o.err))
-		return k.fallback()
-	}
-	var views []string
-	printed := map[string]bool{}
-	for _, a := range k.all(o, "prints", 2) {
-		if v := constText(a.Args[1]); constText(a.Args[0]) == machine && !printed[v] {
-			printed[v] = true
-			views = append(views, v)
-		}
-	}
-	for _, a := range k.all(o, "prints in", 2) {
-		if l := constText(a.Args[1]); constText(a.Args[0]) == machine && l != "plain language" {
-			k.addProblem(fmt.Sprintf("engine.go can't print in %s", l))
-		}
-	}
-	for _, a := range k.all(o, "prints to", 2) {
-		if p := constText(a.Args[1]); constText(a.Args[0]) == machine && p != "standard output" {
-			k.addProblem(fmt.Sprintf("engine.go can't print to %s", p))
-		}
-	}
-	for _, a := range k.all(o, "gives reasons for", 2) {
-		sym, ok := k.pattern(constText(a.Args[1]))
-		if !ok || !printed[constText(a.Args[0])] {
+func pendingCalls(store factstore.ReadOnlyFactStore, executed map[string]bool) []call {
+	var out []call
+	for _, f := range factsOf(store, "calls", 3) {
+		key := f.String()
+		if executed[key] {
 			continue
 		}
-		for _, f := range o.get(sym) {
-			plain, err := k.plainAtom(f)
+		executed[key] = true
+		command, ok := f.Args[0].(ast.Constant)
+		tool, ok1 := textOf(f.Args[1])
+		input, ok2 := textOf(f.Args[2])
+		if ok && ok1 && ok2 {
+			out = append(out, call{command: command, tool: tool, input: input})
+		}
+	}
+	return out
+}
+
+func runCalls(calls []call, shop workshop) []result {
+	results := make([]result, len(calls))
+	slots := make(chan struct{}, max(2, runtime.NumCPU()))
+	var wg sync.WaitGroup
+	for i, c := range calls {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			slots <- struct{}{}
+			results[i] = shop.use(c)
+			<-slots
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+func evaluationOrder(premises []ast.Term) []ast.Term {
+	var first, rest []ast.Term
+	for _, p := range premises {
+		if a, ok := p.(ast.Atom); ok && !a.Predicate.IsBuiltin() {
+			first = append(first, p)
+		} else {
+			rest = append(rest, p)
+		}
+	}
+	return append(first, rest...)
+}
+
+func explain(store factstore.SimpleInMemoryStore, rules []*rule) []ast.Atom {
+	var out []ast.Atom
+	seen := map[string]bool{}
+	query := engine.QueryContext{Store: store}
+	for _, g := range factsOf(store, "gives reasons for", 2) {
+		p, ok := stringOf(g.Args[1])
+		if !ok {
+			continue
+		}
+		words, arity := patternPredicate(p)
+		sym := symbolOf(words, arity)
+		for _, f := range factsOf(store, words, arity) {
+			stated, err := plainTerm(f)
 			if err != nil {
 				continue
 			}
-			for _, r := range k.reasons(o, f) {
-				o.store.Add(ast.NewAtom("holds_because", ast.String(plain), ast.String(r)))
+			for _, r := range rules {
+				if !r.ready || len(r.clause.Premises) == 0 || r.clause.Head.Predicate != sym {
+					continue
+				}
+				subst, err := unionfind.UnifyTermsExtend(r.clause.Head.Args, f.Args, unionfind.New())
+				if err != nil {
+					continue
+				}
+				solutions := []unionfind.UnionFind{subst}
+				for _, premise := range evaluationOrder(r.clause.Premises) {
+					var next []unionfind.UnionFind
+					for _, s := range solutions {
+						found, err := query.EvalPremise(premise, s)
+						if err == nil {
+							next = append(next, found...)
+						}
+					}
+					solutions = next
+				}
+				for _, s := range solutions {
+					for _, premise := range r.clause.Premises {
+						reason, err := plainTerm(premise.ApplySubst(s))
+						if err != nil {
+							continue
+						}
+						key := stated + "\x00" + reason
+						if seen[key] {
+							continue
+						}
+						seen[key] = true
+						out = append(out, fact("holds because", ast.String(stated), ast.String(reason)))
+					}
+				}
 			}
 		}
 	}
-	code := k.answer(o)
-	k.mu.Lock()
-	for _, p := range k.problems[o.problems:] {
-		o.store.Add(problemAtom(p))
-	}
-	k.mu.Unlock()
-	k.print(o, views)
-	return code
+	return out
 }
 
-func (k *knower) exitCode(o *outcome, answer string) (int, bool) {
-	for _, a := range k.all(o, "exits with", 2) {
-		if c, ok := a.Args[1].(ast.Constant); ok && constText(a.Args[0]) == answer && c.Type == ast.NumberType {
-			return int(c.NumValue), true
+func checkMeanings(store factstore.ReadOnlyFactStore, problems *problemList) {
+	for _, f := range factsOf(store, "means in mangle", 2) {
+		line, ok1 := stringOf(f.Args[0])
+		want, ok2 := stringOf(f.Args[1])
+		if !ok1 || !ok2 {
+			problems.add(fmt.Sprintf("%s does not pair a line with mangle text", f.String()))
+			continue
+		}
+		t, err := parseLine(line)
+		if err != nil {
+			problems.add(fmt.Sprintf("%s cannot mean %s in mangle: %v", quote(line), want, err))
+			continue
+		}
+		if got := mangleLine(t); got != want {
+			problems.add(fmt.Sprintf("%s means %s in mangle, not %s", quote(line), got, want))
 		}
 	}
-	return 0, false
 }
 
-func (k *knower) answer(o *outcome) int {
+type output struct {
+	place io.Writer
+	views []string
+}
+
+func printing(store factstore.ReadOnlyFactStore, problems *problemList) []output {
+	views := textsOf(store, "prints", selfName)
+	if len(views) == 0 {
+		return nil
+	}
+	languages := textsOf(store, "prints in", selfName)
+	if len(languages) == 0 {
+		problems.add(fmt.Sprintf("%s is not told what language to print in", selfName))
+	}
+	for _, l := range languages {
+		if l != "plain language" {
+			problems.add(fmt.Sprintf("%s cannot print in %s", selfName, l))
+		}
+	}
+	places := textsOf(store, "prints to", selfName)
+	if len(places) == 0 {
+		problems.add(fmt.Sprintf("%s is not told where to print", selfName))
+	}
+	var out []output
+	for _, p := range places {
+		switch p {
+		case "standard output":
+			out = append(out, output{place: os.Stdout, views: views})
+		case "standard error":
+			out = append(out, output{place: os.Stderr, views: views})
+		default:
+			problems.add(fmt.Sprintf("%s cannot print to %s", selfName, p))
+		}
+	}
+	return out
+}
+
+func decide(store factstore.SimpleInMemoryStore, problems *problemList) int {
+	addProblem := func(text string) {
+		problems.add(text)
+		store.Add(fact("a problem", ast.String(text)))
+	}
 	answer := brokenAnswer
-	k.mu.Lock()
-	fresh := len(k.problems) > o.problems
-	k.mu.Unlock()
-	if len(k.all(o, "a problem", 1)) == 0 && !fresh {
-		var answers []string
-		for _, a := range k.all(o, "conforms", 2) {
-			if constText(a.Args[0]) == theFolder {
-				answers = append(answers, constText(a.Args[1]))
+	if len(factsOf(store, "a problem", 1)) == 0 {
+		answers := map[string]bool{}
+		for _, f := range factsOf(store, "conforms", 2) {
+			if a, ok := textOf(f.Args[1]); ok {
+				answers[a] = true
 			}
 		}
 		if len(answers) == 1 {
-			answer = answers[0]
+			for a := range answers {
+				answer = a
+			}
 		} else {
-			k.addProblem(fmt.Sprintf("the folder conforms in %d ways, not in one", len(answers)))
+			addProblem(fmt.Sprintf("the knowledge gives %d answers to whether the folder conforms, not one", len(answers)))
 		}
 	}
-	if code, ok := k.exitCode(o, answer); ok {
-		return code
+	var codes []int64
+	for _, f := range factsOf(store, "exits with", 2) {
+		a, ok := textOf(f.Args[0])
+		c, isConst := f.Args[1].(ast.Constant)
+		if ok && a == answer && isConst && c.Type == ast.NumberType {
+			codes = append(codes, c.NumValue)
+		}
 	}
-	k.addProblem(fmt.Sprintf("nothing says what %s exits with", answer))
-	if code, ok := k.exitCode(o, brokenAnswer); ok {
-		return code
+	if len(codes) == 1 {
+		return int(codes[0])
 	}
-	return 2
+	addProblem(fmt.Sprintf("the knowledge gives %d exit codes for %s, not one", len(codes), answer))
+	return fallbackCode
 }
 
-func (k *knower) shown(o *outcome, view string) []ast.PredicateSym {
-	explicit := map[string]int{}
-	for i, s := range k.statements {
-		h := s.head
-		if !s.translated || len(s.conds) > 0 || h.verb != "shows" || len(h.args) != 2 {
-			continue
-		}
-		if h.args[0].kind == textValue && h.args[0].text == view && h.args[1].kind == textValue {
-			if _, ok := explicit[h.args[1].text]; !ok {
-				explicit[h.args[1].text] = i
+func printView(w io.Writer, view string, store factstore.ReadOnlyFactStore, rules []*rule, order map[string]int) {
+	var lines []string
+	if view == knowledgeView {
+		inView := map[string]bool{}
+		for _, f := range factsOf(store, "in the knowledge view", 1) {
+			if id, ok := stringOf(f.Args[0]); ok {
+				inView[id] = true
 			}
 		}
+		for _, r := range rules {
+			if !r.ready || !inView[r.id] {
+				continue
+			}
+			text, err := plainRule(r.clause)
+			if err != nil {
+				text = r.text
+			}
+			if len(text) > 1 && len(lines) > 0 && lines[len(lines)-1] != "" {
+				lines = append(lines, "")
+			}
+			lines = append(lines, text...)
+			if len(text) > 1 {
+				lines = append(lines, "")
+			}
+		}
+		if len(lines) > 0 && lines[len(lines)-1] != "" {
+			lines = append(lines, "")
+		}
 	}
-	seenAt := map[string]int{}
-	for i, t := range k.patternOrder {
-		seenAt[t] = i
+	type shown struct {
+		pattern string
+		rank    int
 	}
-	key := func(t string) (int, int) {
-		if n, ok := explicit[t]; ok {
-			return 1, n
+	var patterns []shown
+	for _, f := range factsOf(store, "shows", 2) {
+		v, ok1 := stringOf(f.Args[0])
+		p, ok2 := stringOf(f.Args[1])
+		if !ok1 || !ok2 || v != view {
+			continue
 		}
-		if n, ok := seenAt[t]; ok {
-			return 0, n
+		rank, ok := order[f.String()]
+		if !ok {
+			rank = unstated
 		}
-		return 0, len(k.patternOrder)
+		patterns = append(patterns, shown{p, rank})
 	}
-	var patterns []string
-	for _, a := range k.all(o, "shows", 2) {
-		if constText(a.Args[0]) == view {
-			patterns = append(patterns, constText(a.Args[1]))
+	sort.Slice(patterns, func(i, j int) bool {
+		if patterns[i].rank != patterns[j].rank {
+			return patterns[i].rank < patterns[j].rank
 		}
-	}
-	sort.SliceStable(patterns, func(i, j int) bool {
-		gi, ni := key(patterns[i])
-		gj, nj := key(patterns[j])
-		if gi != gj {
-			return gi < gj
-		}
-		if ni != nj {
-			return ni < nj
-		}
-		return patterns[i] < patterns[j]
+		return patterns[i].pattern < patterns[j].pattern
 	})
-	var syms []ast.PredicateSym
-	seen := map[ast.PredicateSym]bool{}
-	for _, t := range patterns {
-		if sym, ok := k.pattern(t); ok && !seen[sym] {
-			seen[sym] = true
-			syms = append(syms, sym)
+	printed := map[string]bool{}
+	for _, p := range patterns {
+		words, arity := patternPredicate(p.pattern)
+		var found []string
+		for _, f := range factsOf(store, words, arity) {
+			text, err := plainTerm(f)
+			if err == nil && !printed[text] {
+				printed[text] = true
+				found = append(found, text)
+			}
 		}
+		sort.Strings(found)
+		lines = append(lines, found...)
 	}
-	return syms
-}
-
-func (k *knower) print(o *outcome, views []string) {
-	w := bufio.NewWriter(os.Stdout)
-	defer w.Flush()
-	for _, view := range views {
-		if view == knowledgeView {
-			in := map[string]bool{}
-			for _, a := range k.all(o, "in the knowledge view", 1) {
-				in[constText(a.Args[0])] = true
-			}
-			done := map[string]bool{}
-			for _, s := range k.statements {
-				if !s.translated || !in[s.id] || done[s.id] {
-					continue
-				}
-				done[s.id] = true
-				text := s.readBack
-				if text == "" {
-					text = strings.Join(s.lines, "\n")
-				}
-				fmt.Fprintln(w, text)
-			}
-			fmt.Fprintln(w)
-		}
-		for _, sym := range k.shown(o, view) {
-			type line struct {
-				rank int
-				text string
-			}
-			var lines []line
-			for _, a := range o.get(sym) {
-				if s, err := k.plainAtom(a); err == nil {
-					lines = append(lines, line{k.rank(a), s})
-				}
-			}
-			sort.Slice(lines, func(i, j int) bool {
-				if lines[i].rank != lines[j].rank {
-					return lines[i].rank < lines[j].rank
-				}
-				return lines[i].text < lines[j].text
-			})
-			for _, l := range lines {
-				fmt.Fprintln(w, l.text)
-			}
-		}
+	for len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
 	}
-}
-
-func (k *knower) fallback() int {
-	w := bufio.NewWriter(os.Stdout)
-	for _, p := range k.problems {
-		fmt.Fprintln(w, plainText(p)+", is, a problem")
+	if len(lines) > 0 {
+		fmt.Fprintln(w, strings.Join(lines, "\n"))
 	}
-	w.Flush()
-	for _, s := range k.statements {
-		h := s.head
-		if !s.translated || len(s.conds) > 0 || h.verb != "exits with" || len(h.args) != 2 {
-			continue
-		}
-		if h.args[0].kind == textValue && h.args[0].text == brokenAnswer && h.args[1].kind == numberValue {
-			return int(h.args[1].num)
-		}
-	}
-	return 2
 }

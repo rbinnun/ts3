@@ -1,13 +1,11 @@
-module folder
+module machine
 
-go 1.25.0
-
-require codeberg.org/TauCeti/mangle-go v0.7.0
+go 1.23
 
 require (
-	bitbucket.org/creachadair/stringset v0.0.14
+	bitbucket.org/creachadair/stringset v0.0.11
 	github.com/antlr4-go/antlr/v4 v4.13.1
-	github.com/klauspost/compress v1.18.6
+	github.com/google/mangle v0.4.0
 	go.uber.org/multierr v1.11.0
-	golang.org/x/exp v0.0.0-20260611194520-c48552f49976
+	golang.org/x/exp v0.0.0-20240707233637-46b078467d37
 )
