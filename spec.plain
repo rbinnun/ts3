@@ -132,8 +132,10 @@ a law is broken, means in mangle, a_law_is_broken().
 [rule], breaks, Every rule reads back as written
     if [rule], is, read back differently
 
-a rule that reads back differently, adds line, spec.plain, '"zzz", means, nothing'
+a rule that reads back differently, adds line, spec.plain, "engine.go, loads, extra.plain"
+a rule that reads back differently, adds line, extra.plain, '"zzz", means, nothing'
 a rule that reads back differently, must break, Every rule reads back as written
+a rule that reads back differently, must explain, '"extra.plain:1, breaks, Every rule reads back as written", holds because, "extra.plain:1, is, read back differently"'
 
 .plain, means, plain language
 .go, means, go
@@ -159,6 +161,7 @@ a file that is not datalog, must break, The only knowledge is Datalog
 
 a comment, adds line, tools.go, // a note
 a comment, must break, The only knowledge is Datalog
+a comment, must explain, '"tools.go, breaks, The only knowledge is Datalog", holds because, "tools.go, has the comment, // a note"'
 
 [change], is, a change
     if [change], adds line, [any file], [any line]
@@ -192,6 +195,10 @@ a comment, must break, The only knowledge is Datalog
     if [change], must answer, [answer]
     and not this run is a change
     and not [change], answered, [answer]
+[change], breaks, Every change comes out as stated
+    if [change], must explain, [explanation]
+    and not this run is a change
+    and not [change], explains, [explanation]
 [change], breaks, Every change comes out as stated
     if [change], must break, [law]
     and not [law], is, a law
