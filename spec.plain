@@ -27,12 +27,14 @@ tools.go, executes instruction, [fact] holds because [reason]
 tools.go, creates fact, [command] returned [field] [value]
 engine.go, creates fact, this run is a change
 engine.go, creates fact, [text] is a problem
-engine.go, creates fact, [line] is misread
+engine.go, creates fact, [rule] is misread
 engine.go, creates fact, [file] has a rule for [predicate]
 engine.go, creates fact, [rule] defines [predicate]
 engine.go, creates fact, [rule] refers to [predicate]
 engine.go, creates fact, [rule] lays down [law]
 engine.go, creates fact, [fact pattern] names [predicate]
+engine.go, creates fact, [rule] has the blank [blank]
+engine.go, creates fact, [fact pattern] has the slot [slot]
 engine.go, creates fact, [fact] holds because [reason]
 workflow.plain, creates fact, [command] uses [tool] [input]
 workflow.plain, creates fact, [file] is in the folder
@@ -127,8 +129,8 @@ a law is broken, means in mangle, a_law_is_broken().
 "[file], differs from, [other file]", means in mangle, File != OtherFile
 '[command], is the join of, "command: find the comments in ", [file]', means in mangle, 'Command = fn:string:concat("command: find the comments in ", File)'
 
-[line], breaks, Every line reads back as written
-    if [line], is, misread
+[rule], breaks, Every line reads back as written
+    if [rule], is, misread
 
 a line that reads back differently, adds line, spec.plain, '"zzz", means, nothing'
 a line that reads back differently, must break, Every line reads back as written
@@ -218,6 +220,25 @@ a change that expects an unknown law, must break, Every change comes out as stat
 
 a predicate nobody uses, adds line, spec.plain, "a, is, lonely"
 a predicate nobody uses, must break, Every predicate is used
+
+[slot], is, a slot name
+    if [any fact pattern], has the slot, [slot]
+ending, is, a slot name
+[blank], is, well named
+    if [blank], is, a slot name
+[blank], is, well named
+    if [slot], is, a slot name
+    and [blank], is the join of, "any ", [slot]
+[blank], is, well named
+    if [slot], is, a slot name
+    and [blank], is the join of, "other ", [slot]
+
+[blank], breaks, Every blank is named after a slot
+    if [any rule], has the blank, [blank]
+    and not [blank], is, well named
+
+a condition with a badly named blank, adds line, spec.plain, "    if [someone], is, a predicate"
+a condition with a badly named blank, must break, Every blank is named after a slot
 
 a law is broken
     if [any thing], breaks, [any law]
