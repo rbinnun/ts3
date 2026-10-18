@@ -66,6 +66,7 @@ try, returns, explanation
 
 a command with a tool nobody has, adds line, workflow.plain, "command: guess, calls, guess, x"
 a command with a tool nobody has, must break, Every command calls a tool in the catalog
+a command with a tool nobody has, must answer, false
 
 a command not named as a command, adds line, workflow.plain, "list it, calls, list, the folder"
 a command not named as a command, must break, Every command is named as a command
