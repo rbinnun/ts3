@@ -7,8 +7,8 @@ go.mod, is, part of the machine
 go.sum, is, part of the machine
 
 engine.go, executes instruction, [go file] loads [plain file]
-engine.go, executes instruction, [plain] means in mangle [mangle]
-engine.go, executes instruction, [command] uses [tool] [input]
+engine.go, executes instruction, [line] means in mangle [mangle]
+engine.go, executes instruction, [command] calls [tool] [input]
 engine.go, executes instruction, [answer] exits with [code]
 engine.go, executes instruction, [folder] conforms [answer]
 engine.go, executes instruction, [text] is a problem
@@ -27,7 +27,7 @@ tools.go, executes instruction, [fact] holds because [reason]
 tools.go, creates fact, [command] returned [field] [value]
 engine.go, creates fact, this run is a change
 engine.go, creates fact, [text] is a problem
-engine.go, creates fact, [rule] is misread
+engine.go, creates fact, [rule] is read back differently
 engine.go, creates fact, [file] has a rule for [predicate]
 engine.go, creates fact, [rule] defines [predicate]
 engine.go, creates fact, [rule] refers to [predicate]
@@ -36,7 +36,7 @@ engine.go, creates fact, [fact pattern] names [predicate]
 engine.go, creates fact, [rule] has the blank [blank]
 engine.go, creates fact, [fact pattern] has the slot [slot]
 engine.go, creates fact, [fact] holds because [reason]
-workflow.plain, creates fact, [command] uses [tool] [input]
+workflow.plain, creates fact, [command] calls [tool] [input]
 workflow.plain, creates fact, [file] is in the folder
 workflow.plain, creates fact, [file] has the comment [comment]
 
@@ -49,34 +49,34 @@ try, runs, runme.sh
 try, reads, standard output
 try, returns, exit code
 try, returns, broke
-try, returns, why
+try, returns, explanation
 
 [tool], is, in the catalog
     if [tool], returns, [any field]
 [command], is, named as a command
-    if [command], uses, [any tool], [any input]
+    if [command], calls, [any tool], [any input]
     and [command], starts with, "command: "
 
-[command], breaks, Every command uses a tool in the catalog
-    if [command], uses, [tool], [any input]
+[command], breaks, Every command calls a tool in the catalog
+    if [command], calls, [tool], [any input]
     and not [tool], is, in the catalog
 [command], breaks, Every command is named as a command
-    if [command], uses, [any tool], [any input]
+    if [command], calls, [any tool], [any input]
     and not [command], is, named as a command
 
-a command with a tool nobody has, adds line, workflow.plain, "command: guess, uses, guess, x"
-a command with a tool nobody has, must break, Every command uses a tool in the catalog
+a command with a tool nobody has, adds line, workflow.plain, "command: guess, calls, guess, x"
+a command with a tool nobody has, must break, Every command calls a tool in the catalog
 
-a command not named as a command, adds line, workflow.plain, "list it, uses, list, the folder"
+a command not named as a command, adds line, workflow.plain, "list it, calls, list, the folder"
 a command not named as a command, must break, Every command is named as a command
 
 [command], breaks, Every tool returns only what the catalog lists
     if [command], returned, [field], [any value]
-    and [command], uses, [tool], [any input]
+    and [command], calls, [tool], [any input]
     and not [tool], returns, [field]
 
-a command with two tools, adds line, workflow.plain, "command: a mix-up, uses, list, the folder"
-a command with two tools, adds line, workflow.plain, "command: a mix-up, uses, find go comments, tools.go"
+a command with two tools, adds line, workflow.plain, "command: a mix-up, calls, list, the folder"
+a command with two tools, adds line, workflow.plain, "command: a mix-up, calls, find go comments, tools.go"
 a command with two tools, must break, Every tool returns only what the catalog lists
 
 [file], is, a used file
@@ -98,15 +98,15 @@ a file nobody uses, must break, Every file is used
 a missing workflow, adds line, spec.plain, "engine.go, loads, missing.plain"
 a missing workflow, must break, Every file engine.go loads is in the folder
 
-[file], is a creator of, [predicate]
+[file], creates, [predicate]
     if [file], has a rule for, [predicate]
-[file], is a creator of, [predicate]
+[file], creates, [predicate]
     if [file], creates fact, [fact pattern]
     and [fact pattern], names, [predicate]
 
 [file], breaks, Each predicate has one creator
-    if [file], is a creator of, [predicate]
-    and [other file], is a creator of, [predicate]
+    if [file], creates, [predicate]
+    and [other file], creates, [predicate]
     and [other file], differs from, [file]
 
 a workflow that fakes what the tools returned, adds line, workflow.plain, "command: a fake, returned, file, nowhere"
@@ -129,11 +129,11 @@ a law is broken, means in mangle, a_law_is_broken().
 "[file], differs from, [other file]", means in mangle, File != OtherFile
 '[command], is the join of, "command: find the comments in ", [file]', means in mangle, 'Command = fn:string:concat("command: find the comments in ", File)'
 
-[rule], breaks, Every line reads back as written
-    if [rule], is, misread
+[rule], breaks, Every rule reads back as written
+    if [rule], is, read back differently
 
-a line that reads back differently, adds line, spec.plain, '"zzz", means, nothing'
-a line that reads back differently, must break, Every line reads back as written
+a rule that reads back differently, adds line, spec.plain, '"zzz", means, nothing'
+a rule that reads back differently, must break, Every rule reads back as written
 
 .plain, means, plain language
 .go, means, go
@@ -163,27 +163,27 @@ a comment, must break, The only knowledge is Datalog
 [change], is, a change
     if [change], adds line, [any file], [any line]
 [change], broke, [law]
-    if [command], uses, try, [change]
+    if [command], calls, try, [change]
     and [command], returned, broke, [law]
 [change], answered, [answer]
-    if [command], uses, try, [change]
+    if [command], calls, try, [change]
     and [command], returned, exit code, [code]
     and [answer], exits with, [code]
-[change], explains, [line]
-    if [command], uses, try, [change]
-    and [command], returned, why, [line]
+[change], explains, [explanation]
+    if [command], calls, try, [change]
+    and [command], returned, explanation, [explanation]
 [law], is, a law
     if [any rule], lays down, [law]
-[law], is, proven
+[law], is, a law with a counterexample
     if [change], broke, [law]
-    and [change], explains, [any line]
-[law], is, proven
+    and [change], explains, [any explanation]
+[law], is, a law with a counterexample
     if this run is a change
     and [any change], must break, [law]
 
 [law], breaks, Every law has a counterexample
     if [law], is, a law
-    and not [law], is, proven
+    and not [law], is, a law with a counterexample
 [change], breaks, Every change comes out as stated
     if [change], must break, [law]
     and not this run is a change
@@ -203,7 +203,7 @@ a change that expects an unknown law, adds line, workflow.plain, "a ghost change
 a change that expects an unknown law, must break, Every change comes out as stated
 
 [predicate], is, a predicate
-    if [any file], is a creator of, [predicate]
+    if [any file], creates, [predicate]
 [predicate], rests on, [other predicate]
     if [rule], defines, [predicate]
     and [rule], refers to, [other predicate]
@@ -272,6 +272,6 @@ the knowledge view, shows, [folder] conforms [answer]
 the knowledge view, shows, [thing] breaks [law]
 the knowledge view, shows, [change] broke [law]
 the knowledge view, shows, [change] answered [answer]
-the knowledge view, shows, [change] explains [line]
+the knowledge view, shows, [change] explains [explanation]
 the knowledge view, shows, [text] is a problem
 the knowledge view, gives reasons for, [thing] breaks [law]
