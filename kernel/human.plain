@@ -93,6 +93,7 @@ a workflow that makes up a result, must break, Each predicate has one creator
 "kernel/engine.go, loads, kernel/human.plain", means in mangle, 'loads("kernel/engine.go", "kernel/human.plain").'
 "kernel/human.plain, is, in the folder", means in mangle, in_the_folder("kernel/human.plain").
 the knowledge is broken, means in mangle, the_knowledge_is_broken().
+there is a problem, means in mangle, there_is_a_problem().
 "[any file], is, a used file", means in mangle, a_used_file(AnyFile).
 "true, exits with, 0", means in mangle, 'exits_with("true", 0).'
 'a change, adds line, notes.plain, "a, is, a note"', means in mangle, 'adds_line("a change", "notes.plain", "a, is, a note").'
@@ -215,16 +216,25 @@ the knowledge is broken
     if [law], is, a warning
 [law], is, a finding
     if [law], is, a serious warning
+there is a problem
+    if [any text], is, a problem
+the folder, conforms, broken
+    if there is a problem
 the folder, conforms, false
     if the knowledge is broken
+    and not there is a problem
 the folder, conforms, true
     if not the knowledge is broken
+    and not there is a problem
 true, exits with, 0
 false, exits with, 1
 broken, exits with, 2
 
 a spec that cannot load, adds line, kernel/human.plain, "a, b"
 a spec that cannot load, must answer, broken
+
+a wrong mangle example, adds line, kernel/human.plain, '"[file], ends with, [ending]", means in mangle, ":lt(File, Ending)"'
+a wrong mangle example, must answer, broken
 
 [rule], is, in the knowledge
     if [rule], defines, [any predicate]
