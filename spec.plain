@@ -15,14 +15,14 @@ engine.go, executes instruction, [command] calls [tool] [input]
 engine.go, executes instruction, [answer] exits with [code]
 engine.go, executes instruction, [folder] conforms [answer]
 engine.go, executes instruction, [text] is a problem
-engine.go, executes instruction, [go file] prints [view]
+engine.go, executes instruction, [go file] prints [knowledge]
 engine.go, executes instruction, [go file] prints in [language]
 engine.go, executes instruction, [go file] prints to [place]
-engine.go, executes instruction, [rule] is in the knowledge view
-engine.go, executes instruction, [view] shows [fact pattern]
-engine.go, executes instruction, [view] gives reasons for [fact pattern]
-engine.go, executes instruction, [view] is published to [store]
-engine.go, executes instruction, [view] is published only when [answer]
+engine.go, executes instruction, [rule] is in the knowledge
+engine.go, executes instruction, [knowledge] shows [fact pattern]
+engine.go, executes instruction, [knowledge] gives reasons for [fact pattern]
+engine.go, executes instruction, [knowledge] is published to [store]
+engine.go, executes instruction, [knowledge] is published only when [answer]
 engine.go, executes instruction, [store] is the sqlite file [path]
 engine.go, executes instruction, [store] has the table [table]
 engine.go, executes instruction, [table] has a row for [kind]
@@ -265,7 +265,8 @@ ending, is, a slot name
 time, is, a slot name
 prefix, is, a slot name
 key, is, a slot name
-fusion, is, a slot name
+reconciliation, is, a slot name
+part, is, a slot name
 tolerance, is, a slot name
 difference, is, a slot name
 [blank], is, well named
@@ -302,7 +303,7 @@ broken, exits with, 2
 a spec that cannot load, adds line, spec.plain, "a, b"
 a spec that cannot load, must answer, broken
 
-[rule], is, in the knowledge view
+[rule], is, in the knowledge
     if [rule], defines, [any predicate]
 
 [predicate], is, observed
@@ -310,27 +311,27 @@ a spec that cannot load, must answer, broken
     and [fact pattern], names, [predicate]
     and [go file], written in, go
 
-the knowledge view, shows, [fact pattern]
+the knowledge, shows, [fact pattern]
     if [fact pattern], names, [predicate]
     and [predicate], is, observed
 
-engine.go, prints, the knowledge view
+engine.go, prints, the knowledge
 engine.go, prints in, plain language
 engine.go, prints to, standard output
-the knowledge view, shows, [folder] conforms [answer]
-the knowledge view, shows, [thing] breaks [law]
-the knowledge view, shows, [change] broke [law]
-the knowledge view, shows, [change] answered [answer]
-the knowledge view, shows, [change] explains [explanation]
-the knowledge view, shows, [text] is a problem
-the knowledge view, gives reasons for, [thing] breaks [law]
+the knowledge, shows, [folder] conforms [answer]
+the knowledge, shows, [thing] breaks [law]
+the knowledge, shows, [change] broke [law]
+the knowledge, shows, [change] answered [answer]
+the knowledge, shows, [change] explains [explanation]
+the knowledge, shows, [text] is a problem
+the knowledge, gives reasons for, [thing] breaks [law]
 
 a rule id, is computed as, the first 16 hex digits of the sha256 of the rule lines joined by newlines
 a fact id, is computed as, the first 16 hex digits of the sha256 of the fact as one plain line
 a derivation id, is computed as, the first 16 hex digits of the sha256 of the fact and the rule name and the reasons as plain lines joined by newlines
 
-the knowledge view, is published to, the store
-the knowledge view, is published only when, true
+the knowledge, is published to, the store
+the knowledge, is published only when, true
 the store, is the sqlite file, ../store.db
 the certificate, holds, the hash of every file engine.go loads
 the certificate, holds, the answer
@@ -379,16 +380,19 @@ engine_connections.csv, gives the kind in, what
 engine_connections.csv, opens with, connect
 engine_connections.csv, closes with, disconnect
 engine_connections.csv, calls its entities, "engine connection "
-engine_connections.csv, gives the key in, port
+engine_connections.csv, gives the key part, port, port
 
-[row], is about, [entity]
+[row], is, an event
     if [row], is a row of, [source]
     and [source], is, a source
+    and not [row], is, a duplicate
+[row], is about, [entity]
+    if [row], is, an event
+    and [row], is a row of, [source]
     and [source], gives the entity in, [column]
     and [row], has the cell, [column], [value]
     and [source], calls its entities, [prefix]
     and [entity], is the join of, [prefix], [value]
-    and not [row], is, a duplicate
 [row], is of the kind, [kind]
     if [row], is a row of, [source]
     and [source], is, a source
@@ -466,8 +470,8 @@ a close without an open, adds line, engine_connections.csv, 9000,99,disconnect,4
 a close without an open, must break, Every close ends an interval
 a close without an open, must explain, '"engine_connections.csv:8, breaks, Every close ends an interval", holds because, "not engine_connections.csv:8, is, an interval end"'
 
-the knowledge view, shows, [entity] is open between [start] [end]
-the knowledge view, shows, [entity] is still open since [start]
+the knowledge, shows, [entity] is open between [start] [end]
+the knowledge, shows, [entity] is still open since [start]
 
 wire_flows.csv, is, a source
 wire_flows.csv, gives the time in, seen
@@ -476,65 +480,110 @@ wire_flows.csv, gives the kind in, flag
 wire_flows.csv, opens with, SYN
 wire_flows.csv, closes with, FIN
 wire_flows.csv, calls its entities, "wire flow "
-wire_flows.csv, gives the key in, src_port
+wire_flows.csv, gives the key part, port, src_port
 wire_flows.csv, gives the duplicate key in, packet
 
-connections, is, a fusion
-connections, fuses, engine_connections.csv
-connections, fuses, wire_flows.csv
+connections, is, a reconciliation
+connections, has the golden view, engine_connections.csv
+connections, checks, wire_flows.csv
 connections, allows a time difference of, 5
 
-[row], has the key, [key]
+[row], has the key value, [part], [value]
     if [row], is a row of, [source]
-    and [source], gives the key in, [column]
-    and [row], has the cell, [column], [key]
-[row], is close to, [other row]
-    if [row], is a row of, [source]
+    and [source], gives the key part, [part], [column]
+    and [row], has the cell, [column], [value]
+[source], has the key part, [part]
+    if [source], gives the key part, [part], [any column]
+[reconciliation], has the view, [source]
+    if [reconciliation], has the golden view, [source]
+[reconciliation], has the view, [source]
+    if [reconciliation], checks, [source]
+
+[source], breaks, Every view of a reconciliation gives the same key parts
+    if [reconciliation], has the view, [source]
+    and [reconciliation], has the view, [other source]
+    and [other source], has the key part, [part]
+    and not [source], has the key part, [part]
+
+a key part one view lacks, adds line, spec.plain, "wire_flows.csv, gives the key part, flag, flag"
+a key part one view lacks, must break, Every view of a reconciliation gives the same key parts
+a key part one view lacks, must answer, false
+
+[row], could match, [other row]
+    if [reconciliation], is, a reconciliation
+    and [reconciliation], has the golden view, [source]
+    and [reconciliation], checks, [other source]
+    and [row], is a row of, [source]
     and [other row], is a row of, [other source]
-    and [fusion], fuses, [source]
-    and [fusion], fuses, [other source]
-    and [source], differs from, [other source]
-    and [row], has the key, [key]
-    and [other row], has the key, [key]
+    and [row], is, an event
+    and [other row], is, an event
+    and [row], has the key value, [part], [value]
+    and [other row], has the key value, [part], [value]
     and [row], happened at, [time]
     and [other row], happened at, [other time]
-    and [fusion], allows a time difference of, [tolerance]
+    and [reconciliation], allows a time difference of, [tolerance]
     and [difference], is the difference of, [time], [other time]
     and [difference], is at most, [tolerance]
     and [other difference], is the difference of, [other time], [time]
     and [other difference], is at most, [tolerance]
-[row], is corroborated by, [other row]
-    if [row], is close to, [other row]
+[row], differs in a key part from, [other row]
+    if [row], could match, [other row]
+    and [row], has the key value, [part], [value]
+    and [other row], has the key value, [part], [other value]
+    and [value], differs from, [other value]
+[row], is the opposite of, [other row]
+    if [row], could match, [other row]
     and [row], opens, [entity]
-    and [other row], opens, [other entity]
-[row], is corroborated by, [other row]
-    if [row], is close to, [other row]
-    and [row], closes, [entity]
     and [other row], closes, [other entity]
-[row], is corroborated in, [other source]
-    if [row], is corroborated by, [other row]
+[row], is the opposite of, [other row]
+    if [row], could match, [other row]
+    and [row], closes, [entity]
+    and [other row], opens, [other entity]
+[row], matches, [other row]
+    if [row], could match, [other row]
+    and not [row], differs in a key part from, [other row]
+    and not [row], is the opposite of, [other row]
+[row], is matched in, [reconciliation]
+    if [row], matches, [other row]
+    and [row], is a row of, [source]
     and [other row], is a row of, [other source]
+    and [reconciliation], has the golden view, [source]
+    and [reconciliation], checks, [other source]
+[other row], is matched in, [reconciliation]
+    if [row], matches, [other row]
+    and [row], is a row of, [source]
+    and [other row], is a row of, [other source]
+    and [reconciliation], has the golden view, [source]
+    and [reconciliation], checks, [other source]
 
-[row], breaks, Every event is corroborated by every view of its fusion
-    if [row], is a row of, [source]
-    and not [row], is, a duplicate
-    and [fusion], is, a fusion
-    and [fusion], fuses, [source]
-    and [fusion], fuses, [other source]
-    and [source], differs from, [other source]
-    and not [row], is corroborated in, [other source]
-Every event is corroborated by every view of its fusion, is, a serious warning
+[row], breaks, No golden event is lost
+    if [reconciliation], has the golden view, [source]
+    and [row], is a row of, [source]
+    and [row], is, an event
+    and not [row], is matched in, [reconciliation]
+No golden event is lost, is, a serious warning
+[row], breaks, No checked event is invented
+    if [reconciliation], checks, [source]
+    and [row], is a row of, [source]
+    and [row], is, an event
+    and not [row], is matched in, [reconciliation]
+No checked event is invented, is, a serious warning
 
 a wire flow nobody logged, adds line, wire_flows.csv, 8001,40999,SYN,9001
-a wire flow nobody logged, must break, Every event is corroborated by every view of its fusion
+a wire flow nobody logged, must break, No checked event is invented
 a wire flow nobody logged, must answer, true
-a wire flow nobody logged, must explain, '"wire_flows.csv:8, breaks, Every event is corroborated by every view of its fusion", holds because, "not wire_flows.csv:8, is corroborated in, engine_connections.csv"'
+a wire flow nobody logged, must explain, '"wire_flows.csv:8, breaks, No checked event is invented", holds because, "not wire_flows.csv:8, is matched in, connections"'
 
 a disconnect the wire saw too late, adds line, engine_connections.csv, 8000,49,disconnect,40049
 a disconnect the wire saw too late, adds line, wire_flows.csv, 8100,40049,FIN,9002
-a disconnect the wire saw too late, must break, Every event is corroborated by every view of its fusion
+a disconnect the wire saw too late, must break, No golden event is lost
+a disconnect the wire saw too late, must explain, '"engine_connections.csv:8, breaks, No golden event is lost", holds because, "not engine_connections.csv:8, is matched in, connections"'
 
-the knowledge view, shows, [row] is corroborated by [other row]
+an open the wire saw as a close, adds line, engine_connections.csv, 7000,50,connect,40050
+an open the wire saw as a close, adds line, wire_flows.csv, 7001,40050,FIN,9003
+an open the wire saw as a close, must break, No golden event is lost
+
+the knowledge, shows, [row] matches [other row]
 
 [row], has the duplicate key, [key]
     if [row], is a row of, [source]
@@ -560,4 +609,4 @@ a duplicated wire event, must break, No event is duplicated
 a duplicated wire event, must answer, true
 a duplicated wire event, must explain, '"wire_flows.csv:8, breaks, No event is duplicated", holds because, "wire_flows.csv:8, is a duplicate of, wire_flows.csv:2"'
 
-the knowledge view, shows, [row] is a duplicate of [other row]
+the knowledge, shows, [row] is a duplicate of [other row]
