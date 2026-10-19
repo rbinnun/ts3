@@ -286,6 +286,10 @@ func (r *Rule) render() []string {
 
 func (r *Rule) text() string { return strings.Join(r.Lines, "\n") }
 
+func (r *Rule) id() string { return shortHash(r.text()) }
+
+func (r *Rule) place() string { return fmt.Sprintf("%s:%d", r.File, r.Line) }
+
 func (r *Rule) isFact() bool {
 	if len(r.Conds) > 0 {
 		return false
@@ -348,8 +352,11 @@ func parsePlain(file, data string) ([]*Rule, error) {
 		if err != nil {
 			return nil, where(err)
 		}
-		cur = &Rule{Name: fmt.Sprintf("%s:%d", file, no), File: file, Line: no, Lines: []string{line}, Head: a}
+		cur = &Rule{File: file, Line: no, Lines: []string{line}, Head: a}
 		rules = append(rules, cur)
+	}
+	for _, r := range rules {
+		r.Name = r.id()
 	}
 	return rules, nil
 }
@@ -1138,7 +1145,8 @@ var engineQueries = []string{qLoads, qBuildsOn, qTestedWith, qMeans, qLoadedAs, 
 var computations = map[string]string{
 	"a rule id":                     "the first 16 hex digits of the sha256 of the rule lines joined by newlines",
 	"a fact id":                     "the first 16 hex digits of the sha256 of the fact as one plain line",
-	"a derivation id":               "the first 16 hex digits of the sha256 of the fact and the rule name and the reasons as plain lines joined by newlines",
+	"a derivation id":               "the first 16 hex digits of the sha256 of the fact and the rule id and the reasons as plain lines joined by newlines",
+	"a rule name":                   "the rule id",
 	"a row name":                    "the file name and a colon and the line number",
 	"a cell value":                  "the cell text read as a plain value",
 	"a quoted value":                "a value between double quotes unless it holds a double quote and no single quote and then between single quotes",
@@ -1175,7 +1183,6 @@ const (
 	rowReason      = "every reason of every derivation"
 	rowPart        = "every part the certificate holds"
 	colRuleID      = "the rule id"
-	colRuleName    = "the rule name"
 	colRuleFile    = "the file the rule is in"
 	colRuleLine    = "the number of the line the rule starts on"
 	colRuleText    = "the rule lines joined by newlines"
@@ -1199,9 +1206,9 @@ const (
 )
 
 var rowKinds = map[string][]string{
-	rowRule:   {colRuleID, colRuleName, colRuleFile, colRuleLine, colRuleText},
+	rowRule:   {colRuleID, colRuleFile, colRuleLine, colRuleText},
 	rowFact:   {colFactID, colFactText, colOrigin},
-	rowDerive: {colDeriveID, colFactID, colRuleName},
+	rowDerive: {colDeriveID, colFactID, colRuleID},
 	rowReason: {colDeriveID, colReasonAt, colReason},
 	rowPart:   {colPart, colSubject, colPartValue},
 }
@@ -1675,7 +1682,7 @@ func (m *Machine) settle() error {
 	}
 	for _, r := range m.rules {
 		if m.builtins[r.Head.Key()] != nil {
-			return fmt.Errorf("%s: a rule cannot define %s, which means a mangle builtin", r.Name, r.Head.Pred)
+			return fmt.Errorf("%s: a rule cannot define %s, which means a mangle builtin", r.place(), r.Head.Pred)
 		}
 		p, err := m.compile(r)
 		if err != nil {
@@ -1759,7 +1766,7 @@ func (m *Machine) compile(r *Rule) (*plan, error) {
 			}
 		}
 		if pick < 0 {
-			return nil, fmt.Errorf("%s: no order of its conditions knows every blank in time", r.Name)
+			return nil, fmt.Errorf("%s: no order of its conditions knows every blank in time", r.place())
 		}
 		l := left[pick]
 		left = append(left[:pick], left[pick+1:]...)
@@ -1781,7 +1788,7 @@ func (m *Machine) compile(r *Rule) (*plan, error) {
 	}
 	for _, s := range p.head {
 		if s.v >= 0 && !bound[s.v] {
-			return nil, fmt.Errorf("%s: no condition gives a value to [%s]", r.Name, p.names[s.v])
+			return nil, fmt.Errorf("%s: no condition gives a value to [%s]", r.place(), p.names[s.v])
 		}
 	}
 	return p, nil
@@ -1856,7 +1863,7 @@ func (m *Machine) stratify() error {
 				continue
 			}
 			if l.neg {
-				return fmt.Errorf("%s: %s depends on not %s, which depends on it", p.rule.Name, p.rule.Head.Pred, l.key)
+				return fmt.Errorf("%s: %s depends on not %s, which depends on it", p.rule.place(), p.rule.Head.Pred, l.key)
 			}
 			m.loops[c] = true
 		}
@@ -1872,8 +1879,8 @@ func (m *Machine) staticFacts() []Atom {
 	for _, r := range m.rules {
 		name := Str(r.Name)
 		out = append(out,
-			fact("has the id", name, Str(shortHash(r.text()))),
 			fact("is in the file", name, Str(r.File)),
+			fact("is on line", name, Int(int64(r.Line))),
 			fact("defines", name, Str(r.Head.Pred)),
 			fact("has a rule for", Str(r.File), Str(r.Head.Pred)))
 		for _, c := range r.Conds {
@@ -2365,7 +2372,7 @@ func (m *Machine) records(kind string, db *DB, ds []derivation, answer string) (
 		}
 		for _, r := range m.rules {
 			if in[r.Name] {
-				out = append(out, record{colRuleID: Str(shortHash(r.text())), colRuleName: Str(r.Name), colRuleFile: Str(r.File), colRuleLine: Int(int64(r.Line)), colRuleText: Str(r.text())})
+				out = append(out, record{colRuleID: Str(r.Name), colRuleFile: Str(r.File), colRuleLine: Int(int64(r.Line)), colRuleText: Str(r.text())})
 			}
 		}
 	case rowFact:
@@ -2378,7 +2385,7 @@ func (m *Machine) records(kind string, db *DB, ds []derivation, answer string) (
 		sort.Slice(out, func(i, j int) bool { return out[i][colFactText].S < out[j][colFactText].S })
 	case rowDerive:
 		for _, d := range ds {
-			out = append(out, record{colDeriveID: Str(d.id), colFactID: Str(shortHash(d.line)), colRuleName: Str(d.rule.Name)})
+			out = append(out, record{colDeriveID: Str(d.id), colFactID: Str(shortHash(d.line)), colRuleID: Str(d.rule.Name)})
 		}
 	case rowReason:
 		for _, d := range ds {
