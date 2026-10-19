@@ -1,0 +1,82 @@
+kernel/engine.go, loads, reconciliation/human.plain
+kernel/engine.go, loads, reconciliation/agent.plain
+reconciliation, builds on, events
+reconciliation, is tested with, reconciliation/sent.csv
+reconciliation, is tested with, reconciliation/received.csv
+
+reconciliation, expects, "reconciliation/sent.csv:2, matches, reconciliation/received.csv:2"
+reconciliation, expects, "reconciliation/sent.csv:5, matches, reconciliation/received.csv:5"
+reconciliation, expects, "reconciliation/sent.csv:2, is matched in, deliveries"
+reconciliation, expects, "reconciliation/received.csv:2, is matched in, deliveries"
+reconciliation, rules out, "reconciliation/sent.csv:6, is lost in, deliveries"
+
+reconciliation, lets every level state, [reconciliation] is a reconciliation
+reconciliation, lets every level state, [reconciliation] has the golden view [source]
+reconciliation, lets every level state, [reconciliation] checks [source]
+reconciliation, lets every level state, [reconciliation] allows a time difference of [tolerance]
+reconciliation, lets every level state, [reconciliation] does not cover the golden rows with [column] [value]
+reconciliation, lets every level state, [source] gives the key part [part] [column]
+
+[source], breaks, Every view of a reconciliation gives the same key parts
+    if [reconciliation], has the view, [source]
+    and [reconciliation], has the view, [other source]
+    and [other source], has the key part, [part]
+    and not [source], has the key part, [part]
+
+the knowledge, shows, [row] matches [other row]
+
+[row], breaks, No golden event is dropped
+    if [row], is dropped in, [reconciliation]
+No golden event is dropped, is, a warning
+[row], breaks, No golden event is lost
+    if [row], is lost in, [reconciliation]
+    and not [row], is dropped in, [reconciliation]
+No golden event is lost, is, a serious warning
+[row], breaks, No checked event is invented
+    if [reconciliation], checks, [source]
+    and [row], is a row of, [source]
+    and [row], is, an event
+    and not [row], is matched in, [reconciliation]
+No checked event is invented, is, a serious warning
+
+reconciliation/sent.csv, is, a source
+reconciliation/sent.csv, gives the time in, at
+reconciliation/sent.csv, gives the entity in, stream
+reconciliation/sent.csv, calls its entities, "stream "
+reconciliation/sent.csv, gives the sequence in, seq
+reconciliation/sent.csv, gives the key part, item, item
+reconciliation/sent.csv, gives the key part, size, size
+
+reconciliation/received.csv, is, a source
+reconciliation/received.csv, gives the time in, at
+reconciliation/received.csv, gives the key part, item, item
+reconciliation/received.csv, gives the key part, size, size
+
+deliveries, is, a reconciliation
+deliveries, has the golden view, reconciliation/sent.csv
+deliveries, checks, reconciliation/received.csv
+deliveries, allows a time difference of, 5
+deliveries, does not cover the golden rows with, stream, c
+
+a key part one view lacks, adds line, reconciliation/human.plain, "reconciliation/received.csv, gives the key part, colour, colour"
+a key part one view lacks, must break, Every view of a reconciliation gives the same key parts
+a key part one view lacks, must answer, false
+
+a delivery dropped, adds line, reconciliation/sent.csv, 350,a,4,x4,35
+a delivery dropped, adds line, reconciliation/sent.csv, 360,a,5,x5,36
+a delivery dropped, adds line, reconciliation/received.csv, 361,x5,36
+a delivery dropped, must break, No golden event is dropped
+a delivery dropped, must answer, true
+a delivery dropped, must explain, '"reconciliation/sent.csv:7, breaks, No golden event is dropped", holds because, "reconciliation/sent.csv:7, is dropped in, deliveries"'
+
+a delivery never received, adds line, reconciliation/sent.csv, 350,a,4,x4,35
+a delivery never received, must break, No golden event is lost
+a delivery never received, must explain, '"reconciliation/sent.csv:7, breaks, No golden event is lost", holds because, "not reconciliation/sent.csv:7, is dropped in, deliveries"'
+
+a delivery nobody sent, adds line, reconciliation/received.csv, 450,q9,99
+a delivery nobody sent, must break, No checked event is invented
+a delivery nobody sent, must answer, true
+a delivery nobody sent, must explain, '"reconciliation/received.csv:6, breaks, No checked event is invented", holds because, "not reconciliation/received.csv:6, is matched in, deliveries"'
+
+a delivery of another size, adds line, reconciliation/received.csv, 101,x1,11
+a delivery of another size, must break, No checked event is invented
