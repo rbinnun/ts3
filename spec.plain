@@ -18,6 +18,12 @@ engine.go, executes instruction, [go file] prints to [place]
 engine.go, executes instruction, [rule] is in the knowledge view
 engine.go, executes instruction, [view] shows [fact pattern]
 engine.go, executes instruction, [view] gives reasons for [fact pattern]
+engine.go, executes instruction, [view] is published to [store]
+engine.go, executes instruction, [view] is published only when [answer]
+engine.go, executes instruction, [store] is the sqlite file [path]
+engine.go, executes instruction, [store] keeps [kind]
+engine.go, executes instruction, [certificate] holds [part]
+engine.go, executes instruction, [kind] is computed as [method]
 engine.go, executes instruction, [file] creates fact [fact pattern]
 tools.go, executes instruction, [tool] runs [file]
 tools.go, executes instruction, [tool] reads [place]
@@ -36,6 +42,7 @@ engine.go, creates fact, [fact pattern] names [predicate]
 engine.go, creates fact, [rule] has the blank [blank]
 engine.go, creates fact, [fact pattern] has the slot [slot]
 engine.go, creates fact, [fact] holds because [reason]
+engine.go, creates fact, [rule] has the id [id]
 workflow.plain, creates fact, [command] calls [tool] [input]
 workflow.plain, creates fact, [file] is in the folder
 workflow.plain, creates fact, [file] has the comment [comment]
@@ -137,6 +144,15 @@ a rule that reads back differently, adds line, spec.plain, "engine.go, loads, ex
 a rule that reads back differently, adds line, extra.plain, '"zzz", means, nothing'
 a rule that reads back differently, must break, Every rule reads back as written
 a rule that reads back differently, must explain, '"extra.plain:1, breaks, Every rule reads back as written", holds because, "extra.plain:1, is, read back differently"'
+
+[rule], breaks, Every rule has the id it must have
+    if [rule], must have the id, [id]
+    and not [rule], has the id, [id]
+
+spec.plain:1, must have the id, d8d62390482636de
+
+a rule with a wrong id, adds line, spec.plain, "spec.plain:2, must have the id, ffffffffffffffff"
+a rule with a wrong id, must break, Every rule has the id it must have
 
 .plain, means, plain language
 .go, means, go
@@ -283,3 +299,16 @@ the knowledge view, shows, [change] answered [answer]
 the knowledge view, shows, [change] explains [explanation]
 the knowledge view, shows, [text] is a problem
 the knowledge view, gives reasons for, [thing] breaks [law]
+
+a rule id, is computed as, the first 16 hex digits of the sha256 of the rule lines joined by newlines
+a fact id, is computed as, the first 16 hex digits of the sha256 of the fact as one plain line
+
+the knowledge view, is published to, the store
+the knowledge view, is published only when, true
+the store, is the sqlite file, ../store.db
+the store, keeps, every rule with its id
+the store, keeps, every fact with its id
+the store, keeps, every reason for every derived fact
+the store, keeps, the certificate
+the certificate, holds, the hash of every file engine.go loads
+the certificate, holds, the answer
