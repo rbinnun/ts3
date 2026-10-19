@@ -18,10 +18,14 @@ engine.go, executes instruction, [go file] prints to [place]
 engine.go, executes instruction, [rule] is in the knowledge view
 engine.go, executes instruction, [view] shows [fact pattern]
 engine.go, executes instruction, [view] gives reasons for [fact pattern]
+engine.go, executes instruction, [rule] lays down [law]
+engine.go, executes instruction, [change] must break [law]
+engine.go, executes instruction, [level] comes before [other level]
 engine.go, executes instruction, [file] creates fact [fact pattern]
 tools.go, executes instruction, [tool] runs [file]
 tools.go, executes instruction, [tool] reads [place]
 tools.go, executes instruction, [change] adds line [file] [line]
+tools.go, executes instruction, [change] adds rule [file] [head] [condition]
 tools.go, executes instruction, [fact] holds because [reason]
 
 tools.go, creates fact, [command] returned [field] [value]
@@ -45,6 +49,7 @@ find go comments, returns, comment
 find sh comments, returns, comment
 find go comments, finds comments in, go
 find sh comments, finds comments in, sh
+find go comments, finds comments in, go module
 try, runs, runme.sh
 try, reads, standard output
 try, returns, exit code
@@ -160,12 +165,17 @@ go.sum, means, go checksums
 a file that is not datalog, adds line, notes.txt, a note
 a file that is not datalog, must break, The only knowledge is Datalog
 
+a comment in go.mod, adds line, go.mod, // indirect
+a comment in go.mod, must break, The only knowledge is Datalog
+
 a comment, adds line, tools.go, // a note
 a comment, must break, The only knowledge is Datalog
 a comment, must explain, '"tools.go, breaks, The only knowledge is Datalog", holds because, "tools.go, has the comment, // a note"'
 
 [change], is, a change
     if [change], adds line, [any file], [any line]
+[change], is, a change
+    if [change], adds rule, [any file], [any head], [any condition]
 [change], broke, [law]
     if [command], calls, try, [change]
     and [command], returned, broke, [law]
@@ -245,8 +255,8 @@ ending, is, a slot name
     if [any rule], has the blank, [blank]
     and not [blank], is, well named
 
-a condition with a badly named blank, adds line, spec.plain, "    if [someone], is, a predicate"
-a condition with a badly named blank, must break, Every blank is named after a slot
+a rule with a badly named blank, adds rule, spec.plain, "[someone], is, a predicate", "    if [someone], is, a used predicate"
+a rule with a badly named blank, must break, Every blank is named after a slot
 
 a law is broken
     if [any thing], breaks, [any law]
@@ -283,3 +293,29 @@ the knowledge view, shows, [change] answered [answer]
 the knowledge view, shows, [change] explains [explanation]
 the knowledge view, shows, [text] is a problem
 the knowledge view, gives reasons for, [thing] breaks [law]
+
+Every file is used, is a law of, business
+Every file engine.go loads is in the folder, is a law of, business
+The only knowledge is Datalog, is a law of, business
+Every command calls a tool in the catalog, is a law of, machine
+Every command is named as a command, is a law of, machine
+Every tool returns only what the catalog lists, is a law of, machine
+Every rule reads back as written, is a law of, language
+Every blank is named after a slot, is a law of, language
+Every predicate is used, is a law of, language
+Each predicate has one creator, is a law of, language
+Every law has a counterexample, is a law of, language
+Every change comes out as stated, is a law of, language
+Every law has a level, is a law of, language
+
+business, comes before, machine
+machine, comes before, language
+
+[law], is, a law with a level
+    if [law], is a law of, [any level]
+[law], breaks, Every law has a level
+    if [law], is, a law
+    and not [law], is, a law with a level
+
+a law with no level, adds line, workflow.plain, "something, breaks, A law with no level"
+a law with no level, must break, Every law has a level
