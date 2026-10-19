@@ -2,15 +2,9 @@ module machine
 
 go 1.26.0
 
-toolchain go1.26.9
-
-require (
-	codeberg.org/TauCeti/mangle-go v0.7.0
-	modernc.org/sqlite v1.60.1
-)
-
 require (
 	bitbucket.org/creachadair/stringset v0.0.14
+	codeberg.org/TauCeti/mangle-go v0.7.0
 	github.com/antlr4-go/antlr/v4 v4.13.1
 	github.com/dustin/go-humanize v1.0.1
 	github.com/google/uuid v1.6.0
@@ -24,4 +18,5 @@ require (
 	modernc.org/libc v1.77.1
 	modernc.org/mathutil v1.7.1
 	modernc.org/memory v1.12.1
+	modernc.org/sqlite v1.60.1
 )

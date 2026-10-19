@@ -1,10 +1,10 @@
 cd "$(dirname "$0")" || exit 2
-dir=$(mktemp -d) || exit 2
-if ! go build -o "$dir/engine" .; then
-	rm -rf "$dir"
+bin="$(mktemp -d)" || exit 2
+if ! go build -o "$bin/engine" engine.go tools.go; then
+	rm -rf "$bin"
 	exit 2
 fi
-"$dir/engine" "$@"
+"$bin/engine"
 code=$?
-rm -rf "$dir"
+rm -rf "$bin"
 exit "$code"
