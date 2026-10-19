@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"go/ast"
+	"go/parser"
 	"go/scanner"
 	"go/token"
 	"io/fs"
@@ -12,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 type result struct {
@@ -36,6 +39,30 @@ func (m *Machine) toolbox(db *DB) *toolbox {
 	return box
 }
 
+func (m *Machine) runCalls(db *DB, todo []call) []entry {
+	box := m.toolbox(db)
+	results := make([][]entry, len(todo))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
+	for i, c := range todo {
+		wg.Add(1)
+		go func(i int, c call) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			for _, r := range box.run(c.tool.Text(), c.input) {
+				results[i] = append(results[i], entry{fact("returned", c.command, Str(r.field), r.value), m.toolsName})
+			}
+		}(i, c)
+	}
+	wg.Wait()
+	var out []entry
+	for _, r := range results {
+		out = append(out, r...)
+	}
+	return out
+}
+
 func (box *toolbox) run(tool string, input Value) []result {
 	if !box.catalog[tool] {
 		return nil
@@ -45,6 +72,8 @@ func (box *toolbox) run(tool string, input Value) []result {
 		return box.list(input)
 	case "find go comments":
 		return box.comments(input)
+	case "find go functions":
+		return box.functions(input)
 	case "try":
 		return box.try(input)
 	}
@@ -96,6 +125,53 @@ func (box *toolbox) comments(input Value) []result {
 		}
 	}
 	return out
+}
+
+func (box *toolbox) functions(input Value) []result {
+	path, ok := within(box.m.root, input.Text())
+	if !ok {
+		box.m.problem(input.Text() + " is not in the folder that holds the level folders")
+		return nil
+	}
+	src, err := os.ReadFile(path)
+	if err != nil {
+		box.m.problem(input.Text() + " cannot be read")
+		return nil
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), path, src, parser.SkipObjectResolution)
+	if err != nil {
+		box.m.problem(input.Text() + " cannot be read as go")
+		return nil
+	}
+	var out []result
+	for _, d := range file.Decls {
+		f, ok := d.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		name := f.Name.Name
+		if f.Recv != nil && len(f.Recv.List) > 0 {
+			name = receiverName(f.Recv.List[0].Type) + "." + name
+		}
+		out = append(out, result{"function", Str(name)})
+	}
+	return out
+}
+
+func receiverName(t ast.Expr) string {
+	switch x := t.(type) {
+	case *ast.StarExpr:
+		return receiverName(x.X)
+	case *ast.ParenExpr:
+		return receiverName(x.X)
+	case *ast.IndexExpr:
+		return receiverName(x.X)
+	case *ast.IndexListExpr:
+		return receiverName(x.X)
+	case *ast.Ident:
+		return x.Name
+	}
+	return ""
 }
 
 func copyTree(from, to string) error {

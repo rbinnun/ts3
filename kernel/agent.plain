@@ -12,6 +12,15 @@ command: list the folder, calls, list, the folder
     if [command], calls, find go comments, [file]
     and [command], returned, comment, [comment]
 
+[command], calls, find go functions, [file]
+    if [file], is, in the folder
+    and [file], ends with, .go
+    and [command], is the join of, "command: find the functions in ", [file]
+
+[file], has the function, [function]
+    if [command], calls, find go functions, [file]
+    and [command], returned, function, [function]
+
 [command], calls, try, [change]
     if [change], is, a change
     and not this run is a change
@@ -25,6 +34,8 @@ list, is, in the catalog
 list, returns, file
 find go comments, is, in the catalog
 find go comments, returns, comment
+find go functions, is, in the catalog
+find go functions, returns, function
 try, is, in the catalog
 try, returns, broke
 try, returns, exit code
@@ -47,11 +58,6 @@ kernel/runme.sh, is, a used file
 
 [predicate], is, a predicate
     if [any rule], defines, [predicate]
-[predicate], is, a used predicate
-    if [any rule], refers to, [predicate]
-[predicate], is, a used predicate
-    if the knowledge, shows, [fact pattern]
-    and [fact pattern], names, [predicate]
 
 ending, is, a slot name
 language, is, a slot name
@@ -71,3 +77,164 @@ code, is, a slot name
     if [any rule], has the blank, [blank]
     and [slot], is, a slot
     and [blank], is the join of, "other ", [slot]
+
+Str, implements, [language] is loaded as [way]
+Int, implements, [language] is loaded as [way]
+Value.Text, implements, [language] is loaded as [way]
+readNumber, implements, [term] is computed as [description]
+plainValue, implements, [term] is computed as [description]
+Term.IsBlank, implements, [language] is loaded as [way]
+Term.isText, implements, [language] is loaded as [way]
+predKey, implements, [language] is loaded as [way]
+Atom.Key, implements, [language] is loaded as [way]
+Atom.tuple, implements, [language] is loaded as [way]
+fact, implements, [language] is loaded as [way]
+splitParts, implements, [term] is computed as [description]
+partTerm, implements, [language] is loaded as [way]
+isWords, implements, [language] is loaded as [way]
+parseAtom, implements, [language] is loaded as [way]
+readCell, implements, [row] has the cell [column] [value]
+needsQuotes, implements, [term] is computed as [description]
+quoteText, implements, [term] is computed as [description]
+renderValue, implements, [rule] is read back differently
+renderTerm, implements, [rule] is read back differently
+renderAtom, implements, [rule] is read back differently
+renderAtom, implements, [go file] prints in [language]
+renderCondition, implements, [rule] is read back differently
+renderCondition, implements, [fact] holds because [reason]
+Rule.render, implements, [rule] is read back differently
+Rule.text, implements, [rule] is read back differently
+Rule.id, implements, [term] is computed as [description]
+Rule.place, implements, [rule] is on line [number]
+Rule.isFact, implements, [language] is loaded as [way]
+parsePlain, implements, [language] is loaded as [way]
+parsePlain, implements, [rule] is in the file [file]
+parsePlain, implements, [rule] is on line [number]
+parsePattern, implements, [fact pattern] names [predicate]
+parsePattern, implements, [fact pattern] has the slot [slot]
+shortHash, implements, [term] is computed as [description]
+hashFile, implements, [certificate] holds [part]
+tupleKey, implements, [thing] breaks [law]
+Rel.lookup, implements, [thing] breaks [law]
+newDB, implements, [thing] breaks [law]
+DB.add, implements, [thing] breaks [law]
+DB.addFact, implements, [table] has the column [number] [column] [value]
+DB.originOf, implements, [table] has the column [number] [column] [value]
+DB.has, implements, [fact] is missing
+DB.has, implements, [fact] is present
+Binding.text, implements, [thing] breaks [law]
+DB.ask, implements, [thing] breaks [law]
+DB.each, implements, [thing] breaks [law]
+DB.solve, implements, [thing] breaks [law]
+DB.solve, implements, [term] is computed as [description]
+ground, implements, [thing] breaks [law]
+Builtin.positions, implements, [line] means in mangle [mangle]
+Builtin.needs, implements, [line] means in mangle [mangle]
+Builtin.output, implements, [line] means in mangle [mangle]
+Builtin.value, implements, [line] means in mangle [mangle]
+Builtin.eval, implements, [line] means in mangle [mangle]
+callBuiltin, implements, [line] means in mangle [mangle]
+applyFunction, implements, [line] means in mangle [mangle]
+mangleTokens, implements, [line] means in mangle [mangle]
+parseMangle, implements, [line] means in mangle [mangle]
+camel, implements, [line] means in mangle [mangle]
+mangleString, implements, [line] means in mangle [mangle]
+mangleTerm, implements, [line] means in mangle [mangle]
+mangleAtom, implements, [line] means in mangle [mangle]
+Builtin.render, implements, [line] means in mangle [mangle]
+Machine.problem, implements, [text] is a problem
+within, implements, [term] is computed as [description]
+isDir, implements, [term] is computed as [description]
+realPath, implements, [term] is computed as [description]
+Machine.setup, implements, [term] is computed as [description]
+Machine.source, implements, [go file] loads [file]
+groundDB, implements, [go file] loads [file]
+groundDB, implements, [level] builds on [other level]
+Machine.sourceRules, implements, [rule] is in the file [file]
+Machine.loadLevels, implements, [level] builds on [other level]
+Machine.wayFor, implements, [ending] means [language]
+Machine.wayFor, implements, [language] is loaded as [way]
+Machine.loadFiles, implements, [go file] loads [file]
+Machine.loadFiles, implements, [level] is tested with [file]
+readRows, implements, [row] is a row of [source]
+readRows, implements, [row] has the cell [column] [value]
+readRows, implements, [row] is on line [number]
+certificateSpec, implements, [table] has the column [number] [column] [value]
+sqlName, implements, [store] has the table [table]
+Machine.isProven, implements, [level] is proven
+blanksOf, implements, [rule] has the blank [blank]
+blanksOf, implements, [fact pattern] has the slot [slot]
+Rule.atoms, implements, [rule] has the blank [blank]
+patternPositions, implements, [fact pattern] names [predicate]
+Machine.settle, implements, [level] is proven
+Machine.settle, implements, [file] is certified
+Machine.settle, implements, [fact pattern] is private to its level
+Machine.settle, implements, [line] means in mangle [mangle]
+Machine.compile, implements, [thing] breaks [law]
+Machine.compile, implements, [term] is computed as [description]
+Machine.stratify, implements, [thing] breaks [law]
+Machine.staticFacts, implements, this run is a change
+Machine.staticFacts, implements, [rule] is read back differently
+Machine.staticFacts, implements, [file] has a rule for [predicate]
+Machine.staticFacts, implements, [rule] defines [predicate]
+Machine.staticFacts, implements, [rule] refers to [predicate]
+Machine.staticFacts, implements, [rule] lays down [law]
+Machine.staticFacts, implements, [fact pattern] names [predicate]
+Machine.staticFacts, implements, [rule] has the blank [blank]
+Machine.staticFacts, implements, [fact pattern] has the slot [slot]
+Machine.staticFacts, implements, [rule] is in the file [file]
+Machine.staticFacts, implements, [rule] is on line [number]
+Machine.staticFacts, implements, [level] is proven
+Machine.staticFacts, implements, [file] is certified
+Machine.evaluate, implements, [thing] breaks [law]
+Machine.base, implements, [text] is a problem
+Machine.think, implements, [command] calls [tool] [input]
+Machine.expectations, implements, [fact] is missing
+Machine.expectations, implements, [fact] is present
+Machine.translate, implements, [line] means in mangle [mangle]
+Machine.check, implements, [text] is a problem
+Machine.derive, implements, [fact] holds because [reason]
+matches, implements, [knowledge] shows [fact pattern]
+matches, implements, [knowledge] gives reasons for [fact pattern]
+Machine.giveReasons, implements, [fact] holds because [reason]
+Machine.giveReasons, implements, [knowledge] gives reasons for [fact pattern]
+DB.facts, implements, [knowledge] shows [fact pattern]
+Machine.print, implements, [go file] prints [knowledge]
+Machine.print, implements, [go file] prints in [language]
+Machine.print, implements, [go file] prints to [output]
+Machine.print, implements, [knowledge] shows [fact pattern]
+Machine.print, implements, [folder] conforms [answer]
+Machine.answer, implements, [folder] conforms [answer]
+Machine.answer, implements, [answer] exits with [code]
+Machine.machineFiles, implements, [certificate] holds [part]
+Machine.records, implements, [table] has a row for [row]
+Machine.records, implements, [rule] is in the knowledge
+Machine.records, implements, [certificate] holds [part]
+Machine.publish, implements, [knowledge] is published to [store]
+Machine.publish, implements, [knowledge] is published only when [answer]
+Machine.publish, implements, [store] is the sqlite file [file]
+Machine.publish, implements, [store] has the table [table]
+writeStore, implements, [store] has the table [table]
+writeStore, implements, [table] has the column [number] [column] [value]
+main, implements, [answer] exits with [code]
+run, implements, [answer] exits with [code]
+run, implements, this run is a change
+Machine.runCalls, implements, [command] returned [field] [value]
+Machine.toolbox, implements, [tool] is in the catalog
+Machine.toolbox, implements, [change] adds line [file] [line]
+toolbox.run, implements, [command] returned [field] [value]
+toolbox.run, implements, [tool] is in the catalog
+toolbox.list, implements, [command] returned [field] [value]
+toolbox.comments, implements, [command] returned [field] [value]
+toolbox.functions, implements, [command] returned [field] [value]
+receiverName, implements, [command] returned [field] [value]
+copyTree, implements, [change] adds line [file] [line]
+appendLine, implements, [change] adds line [file] [line]
+toolbox.try, implements, [command] returned [field] [value]
+toolbox.try, implements, [change] adds line [file] [line]
+sortedKeys, implements, [command] returned [field] [value]
+
+a fact with no function, adds line, kernel/human.plain, "kernel/engine.go, creates fact, [fact] is made up"
+a fact with no function, must break, Every fact the machine creates has a function
+a fact with no function, must answer, false
+a fact with no function, must explain, '"[fact] is made up, breaks, Every fact the machine creates has a function", holds because, "not [any function], implements, [fact] is made up"'
