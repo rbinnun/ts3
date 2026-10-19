@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"go/scanner"
 	"go/token"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,280 +12,205 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/google/mangle/ast"
 )
-
-const (
-	toolsFile       = "tools.go"
-	returnedPattern = "[command] returned [field] [value]"
-	standardOutput  = "standard output"
-)
-
-var toolsInstructions = []string{
-	"[tool] runs [file]",
-	"[tool] reads [place]",
-	"[change] adds line [file] [line]",
-	"[fact] holds because [reason]",
-}
-
-var commentLanguages = map[string]string{
-	"find go comments": "go",
-	"find sh comments": "sh",
-}
-
-type call struct {
-	command term
-	tool    string
-	input   term
-}
 
 type result struct {
 	field string
-	value term
+	value ast.Constant
 }
 
-func (c call) job() string {
-	return c.tool + "\x00" + c.input.plain()
+type addedLine struct {
+	file  string
+	line  string
+	order int
+	text  string
 }
 
-func (m *machine) work(k *view) bool {
-	calls, ok := m.instruction(engineFile, "[command] calls [tool] [input]")
-	returned, ok2 := m.creates(toolsFile, returnedPattern)
-	if !ok || !ok2 {
-		return false
+type trial struct {
+	change string
+	level  string
+	script string
+	lines  []addedLine
+}
+
+func (m *machine) runCalls(calls []call) {
+	jobs := make([]func() []result, len(calls))
+	for i, c := range calls {
+		jobs[i] = m.tool(c)
 	}
-	var todo []call
-	for _, f := range k.facts(calls) {
-		if f[1].kind != textTerm {
-			continue
-		}
-		c := call{f[0], f[1].text, f[2]}
-		key := c.command.plain() + "\x00" + c.job()
-		if m.done[key] {
-			continue
-		}
-		m.done[key] = true
-		todo = append(todo, c)
-	}
-	if len(todo) == 0 {
-		return false
-	}
-	var jobs []call
-	planned := map[string]bool{}
-	for _, c := range todo {
-		if _, ok := m.cache[c.job()]; !ok && !planned[c.job()] {
-			planned[c.job()] = true
-			jobs = append(jobs, c)
-		}
-	}
-	found := make([][]result, len(jobs))
-	limit := make(chan bool, runtime.NumCPU())
+	results := make([][]result, len(calls))
+	slots := make(chan struct{}, runtime.NumCPU())
 	var wg sync.WaitGroup
-	for i, c := range jobs {
+	for i := range jobs {
 		wg.Add(1)
-		go func(i int, c call) {
+		go func(i int) {
 			defer wg.Done()
-			limit <- true
-			defer func() { <-limit }()
-			found[i] = m.use(c.tool, c.input, k)
-		}(i, c)
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			results[i] = jobs[i]()
+		}(i)
 	}
 	wg.Wait()
-	for i, c := range jobs {
-		m.cache[c.job()] = found[i]
-	}
-	for _, c := range todo {
-		for _, r := range m.cache[c.job()] {
-			m.returned = append(m.returned, atom{returned, []term{c.command, text(r.field), r.value}})
+	for i, c := range calls {
+		m.ran[c.key] = true
+		for _, r := range results[i] {
+			m.addToolFact(c.command, r.field, r.value)
 		}
 	}
-	return true
 }
 
-func (m *machine) use(tool string, input term, k *view) []result {
-	switch tool {
+func (m *machine) tool(c call) func() []result {
+	switch c.tool {
 	case "list":
-		return m.list()
+		return func() []result { return m.list(c.input) }
+	case "find go comments":
+		return func() []result { return m.goComments(c.input) }
+	case "find sh comments":
+		return func() []result { return m.shComments(c.input) }
 	case "try":
-		return m.try(input, k)
+		t := m.plan(c.input)
+		return func() []result { return m.try(t) }
 	}
-	if language, ok := commentLanguages[tool]; ok {
-		return m.comments(language, input)
-	}
-	return nil
+	return func() []result { return nil }
 }
 
-func (m *machine) list() []result {
-	entries, err := os.ReadDir(m.folder)
+func (m *machine) list(input string) []result {
+	dir := m.folder
+	if input != "the folder" {
+		dir = filepath.Join(m.folder, input)
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
 	var out []result
 	for _, e := range entries {
-		out = append(out, result{"file", text(e.Name())})
+		if e.Type().IsRegular() {
+			out = append(out, result{"file", ast.String(e.Name())})
+		}
 	}
 	return out
 }
 
-func (m *machine) comments(language string, input term) []result {
-	if input.kind != textTerm {
-		return nil
-	}
-	data, err := os.ReadFile(filepath.Join(m.folder, input.text))
+func (m *machine) goComments(input string) []result {
+	src, err := os.ReadFile(filepath.Join(m.folder, input))
 	if err != nil {
 		return nil
 	}
-	var found []string
-	switch language {
-	case "go":
-		found = goComments(data)
-	case "sh":
-		found = shComments(string(data))
-	}
-	var out []result
-	for _, c := range found {
-		out = append(out, result{"comment", text(c)})
-	}
-	return out
-}
-
-func goComments(src []byte) []string {
 	fset := token.NewFileSet()
-	file := fset.AddFile("", fset.Base(), len(src))
+	file := fset.AddFile(input, fset.Base(), len(src))
 	var s scanner.Scanner
 	s.Init(file, src, func(token.Position, string) {}, scanner.ScanComments)
-	var out []string
+	var out []result
 	for {
 		_, tok, lit := s.Scan()
 		if tok == token.EOF {
 			return out
 		}
 		if tok == token.COMMENT {
-			out = append(out, lit)
+			out = append(out, result{"comment", ast.String(lit)})
 		}
 	}
 }
 
-func shComments(src string) []string {
-	var out []string
-	single, double, start := false, false, true
+func (m *machine) shComments(input string) []result {
+	src, err := os.ReadFile(filepath.Join(m.folder, input))
+	if err != nil {
+		return nil
+	}
+	var out []result
+	single, double := false, false
+	prev := byte('\n')
 	for i := 0; i < len(src); i++ {
 		c := src[i]
 		switch {
 		case single:
-			single = c != '\''
-			start = false
-			continue
-		case double:
-			if c == '\\' {
-				i++
-			} else {
-				double = c != '"'
+			if c == '\'' {
+				single = false
 			}
-			start = false
-			continue
-		case c == '\\':
+		case double:
+			if c == '\\' && i+1 < len(src) {
+				i++
+				c = src[i]
+			} else if c == '"' {
+				double = false
+			}
+		case c == '\\' && i+1 < len(src):
 			i++
-			start = false
-			continue
+			c = src[i]
 		case c == '\'':
 			single = true
 		case c == '"':
 			double = true
-		case c == '#' && start:
-			end := strings.IndexByte(src[i:], '\n')
-			if end < 0 {
-				end = len(src) - i
+		case c == '#' && strings.IndexByte("\n \t;&|()", prev) >= 0:
+			j := bytes.IndexByte(src[i:], '\n')
+			if j < 0 {
+				j = len(src) - i
 			}
-			out = append(out, src[i:i+end])
-			i += end - 1
-			start = true
-			continue
+			out = append(out, result{"comment", ast.String(strings.TrimRight(string(src[i:i+j]), "\r"))})
+			i += j - 1
+			c = '#'
 		}
-		start = strings.IndexByte(" \t\n;&|()<>", c) >= 0
+		prev = c
 	}
 	return out
 }
 
-func (m *machine) try(change term, k *view) []result {
-	runs, ok1 := m.instruction(toolsFile, "[tool] runs [file]")
-	reads, ok2 := m.instruction(toolsFile, "[tool] reads [place]")
-	adds, ok3 := m.instruction(toolsFile, "[change] adds line [file] [line]")
-	because, ok4 := m.instruction(toolsFile, "[fact] holds because [reason]")
-	if m.isChange || change.kind != textTerm || !ok1 || !ok2 || !ok3 || !ok4 {
-		return nil
-	}
-	script, place := "", ""
-	for _, f := range k.facts(runs) {
-		if f[0] == text("try") {
-			script = f[1].raw()
+func (m *machine) plan(change string) trial {
+	t := trial{change: change, level: m.level, script: "runme.sh"}
+	for _, row := range m.facts("runs", 2) {
+		if textOf(row[0]) == "try" {
+			t.script = textOf(row[1])
 		}
 	}
-	for _, f := range k.facts(reads) {
-		if f[0] == text("try") {
-			place = f[1].raw()
+	order := map[string]int{}
+	levels := map[string]string{}
+	for i, r := range m.rules {
+		if r.fact("adds line", 3) {
+			k := formatAtom(r.head)
+			if _, ok := order[k]; !ok {
+				order[k] = i
+				levels[k] = r.level
+			}
 		}
 	}
-	if script == "" || place != standardOutput {
-		return nil
-	}
-	type addition struct {
-		file, line string
-		order, at  int
-	}
-	var additions []addition
-	for _, f := range k.facts(adds) {
-		if f[0] == change {
-			order, at := m.position(atom{adds, f})
-			additions = append(additions, addition{f[1].raw(), f[2].raw(), order, at})
-		}
-	}
-	sort.SliceStable(additions, func(i, j int) bool {
-		if additions[i].order != additions[j].order {
-			return additions[i].order < additions[j].order
-		}
-		return additions[i].at < additions[j].at
-	})
-	tmp, err := os.MkdirTemp("", "try-")
-	if err != nil {
-		return nil
-	}
-	defer os.RemoveAll(tmp)
-	dst := filepath.Join(tmp, filepath.Base(m.folder))
-	if err := copyFolder(m.folder, dst); err != nil {
-		return nil
-	}
-	for _, a := range additions {
-		if err := addLine(filepath.Join(dst, a.file), a.line); err != nil {
-			return nil
-		}
-	}
-	cmd := exec.Command("sh", script, change.text)
-	cmd.Dir = dst
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = os.Stderr
-	cmd.Run()
-	if cmd.ProcessState == nil {
-		return nil
-	}
-	results := []result{{"exit code", number(int64(cmd.ProcessState.ExitCode()))}}
-	breaks := pred{relation, "breaks", 2}
-	for _, line := range strings.Split(out.String(), "\n") {
-		a, err := readAtom(line)
-		if err != nil || line == "" {
+	for _, row := range m.facts("adds line", 3) {
+		if textOf(row[0]) != change {
 			continue
 		}
-		switch a.pred.id() {
-		case breaks.id():
-			results = append(results, result{"broke", a.args[1]})
-		case because.id():
-			results = append(results, result{"explanation", text(line)})
+		a := atom{pred: "adds line", args: []value{valueOf(row[0]), valueOf(row[1]), valueOf(row[2])}}
+		k := formatAtom(a)
+		o, ok := order[k]
+		if !ok {
+			o = len(m.rules)
+		}
+		t.lines = append(t.lines, addedLine{file: textOf(row[1]), line: textOf(row[2]), order: o, text: k})
+	}
+	sort.SliceStable(t.lines, func(i, j int) bool {
+		if t.lines[i].order != t.lines[j].order {
+			return t.lines[i].order < t.lines[j].order
+		}
+		return t.lines[i].text < t.lines[j].text
+	})
+	if len(t.lines) > 0 {
+		if l, ok := levels[t.lines[0].text]; ok {
+			t.level = l
 		}
 	}
-	return results
+	return t
 }
 
-func copyFolder(from, to string) error {
+func copyFile(from, to string) error {
+	data, err := os.ReadFile(from)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(to, data, 0o644)
+}
+
+func copyDir(from, to string) error {
 	if err := os.MkdirAll(to, 0o755); err != nil {
 		return err
 	}
@@ -293,27 +219,98 @@ func copyFolder(from, to string) error {
 		return err
 	}
 	for _, e := range entries {
-		if !e.Type().IsRegular() {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(from, e.Name()))
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(to, e.Name()), data, 0o644); err != nil {
-			return err
+		src, dst := filepath.Join(from, e.Name()), filepath.Join(to, e.Name())
+		switch {
+		case e.IsDir():
+			if err := copyDir(src, dst); err != nil {
+				return err
+			}
+		case e.Type().IsRegular():
+			if err := copyFile(src, dst); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
-func addLine(path, line string) error {
-	old, err := os.ReadFile(path)
+func (m *machine) copyLevels(to string) error {
+	entries, err := os.ReadDir(m.root)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		src, dst := filepath.Join(m.root, e.Name()), filepath.Join(to, e.Name())
+		switch {
+		case e.IsDir() && exists(filepath.Join(src, e.Name()+".plain")):
+			if err := copyDir(src, dst); err != nil {
+				return err
+			}
+		case e.Type().IsRegular() && strings.HasSuffix(e.Name(), ".db"):
+			if err := copyFile(src, dst); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func appendLine(path, line string) error {
+	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if len(old) > 0 && old[len(old)-1] != '\n' {
-		old = append(old, '\n')
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		data = append(data, '\n')
 	}
-	return os.WriteFile(path, append(old, []byte(line+"\n")...), 0o644)
+	data = append(data, line...)
+	data = append(data, '\n')
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+func (m *machine) try(t trial) []result {
+	dir, err := os.MkdirTemp("", "try-")
+	if err != nil {
+		return nil
+	}
+	defer os.RemoveAll(dir)
+	if err := m.copyLevels(dir); err != nil {
+		return nil
+	}
+	for _, l := range t.lines {
+		if err := appendLine(filepath.Join(dir, t.level, l.file), l.line); err != nil {
+			return nil
+		}
+	}
+	cmd := exec.Command("sh", filepath.Join(dir, filepath.Base(m.kernelDir), t.script))
+	cmd.Dir = filepath.Join(dir, t.level)
+	cmd.Env = append(os.Environ(), changeVariable+"="+t.change)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = io.Discard
+	code := 0
+	if err := cmd.Run(); err != nil {
+		e, ok := err.(*exec.ExitError)
+		if !ok {
+			return nil
+		}
+		code = e.ExitCode()
+	}
+	res := []result{{"exit code", ast.Number(int64(code))}}
+	for _, line := range strings.Split(out.String(), "\n") {
+		a, err := parseAtom(line)
+		if err != nil {
+			continue
+		}
+		switch a.key() {
+		case "breaks/2":
+			res = append(res, result{"broke", constOf(a.args[1])})
+		case "holds because/2":
+			res = append(res, result{"explanation", ast.String(line)})
+		}
+	}
+	return res
 }

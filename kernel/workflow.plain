@@ -15,4 +15,5 @@ command: list the folder, calls, list, the folder
 
 [command], calls, try, [change]
     if [change], is, a change
+    and not this run is a change
     and [command], is the join of, "command: try ", [change]
