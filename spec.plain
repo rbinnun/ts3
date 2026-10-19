@@ -1,7 +1,8 @@
 engine.go, loads, spec.plain
 engine.go, loads, workflow.plain
 engine.go, loads, engine_connections.csv
-engine.go, loads, wire_flows.csv
+engine.go, loads, engine_messages.csv
+engine.go, loads, wire_messages.csv
 engine.go, is, part of the machine
 tools.go, is, part of the machine
 runme.sh, is, part of the machine
@@ -147,6 +148,7 @@ the knowledge is broken, means in mangle, the_knowledge_is_broken().
 "[time], is before, [other time]", means in mangle, ":lt(Time, OtherTime)"
 "[difference], is the difference of, [later], [earlier]", means in mangle, "Difference = fn:minus(Later, Earlier)"
 "[difference], is at most, [tolerance]", means in mangle, ":le(Difference, Tolerance)"
+"[number], is one more than, [other number]", means in mangle, "Number = fn:plus(OtherNumber, 1)"
 "[entity], is the join of, [prefix], [value]", means in mangle, "Entity = fn:string:concat(Prefix, Value)"
 '[command], is the join of, "command: find the comments in ", [file]', means in mangle, 'Command = fn:string:concat("command: find the comments in ", File)'
 
@@ -380,7 +382,7 @@ engine_connections.csv, gives the kind in, what
 engine_connections.csv, opens with, connect
 engine_connections.csv, closes with, disconnect
 engine_connections.csv, calls its entities, "engine connection "
-engine_connections.csv, gives the key part, port, port
+engine_connections.csv, gives the interval key in, port
 
 [row], is, an event
     if [row], is a row of, [source]
@@ -473,20 +475,70 @@ a close without an open, must explain, '"engine_connections.csv:8, breaks, Every
 the knowledge, shows, [entity] is open between [start] [end]
 the knowledge, shows, [entity] is still open since [start]
 
-wire_flows.csv, is, a source
-wire_flows.csv, gives the time in, seen
-wire_flows.csv, gives the entity in, src_port
-wire_flows.csv, gives the kind in, flag
-wire_flows.csv, opens with, SYN
-wire_flows.csv, closes with, FIN
-wire_flows.csv, calls its entities, "wire flow "
-wire_flows.csv, gives the key part, port, src_port
-wire_flows.csv, gives the duplicate key in, packet
+[row], has the interval key, [key]
+    if [row], is a row of, [source]
+    and [source], gives the interval key in, [column]
+    and [row], has the cell, [column], [key]
+[row], falls inside, [entity]
+    if [row], is a row of, [source]
+    and [source], must fall inside the intervals of, [any source]
+    and [row], has the interval key, [key]
+    and [row], happened at, [time]
+    and [other row], opens, [entity]
+    and [other row], has the interval key, [key]
+    and [other row], happened at, [start]
+    and [entity], is open between, [start], [end]
+    and [start], is at most, [time]
+    and [time], is at most, [end]
+[row], falls inside, [entity]
+    if [row], is a row of, [source]
+    and [source], must fall inside the intervals of, [any source]
+    and [row], has the interval key, [key]
+    and [row], happened at, [time]
+    and [other row], opens, [entity]
+    and [other row], has the interval key, [key]
+    and [other row], happened at, [start]
+    and [entity], is still open since, [start]
+    and [start], is at most, [time]
+[row], falls inside an interval of, [other source]
+    if [row], falls inside, [entity]
+    and [other row], is about, [entity]
+    and [other row], is a row of, [other source]
 
-connections, is, a reconciliation
-connections, has the golden view, engine_connections.csv
-connections, checks, wire_flows.csv
-connections, allows a time difference of, 5
+[row], breaks, Every event falls inside an open interval
+    if [source], must fall inside the intervals of, [other source]
+    and [row], is a row of, [source]
+    and [row], is, an event
+    and not [row], falls inside an interval of, [other source]
+Every event falls inside an open interval, is, a serious warning
+
+a wire message after its session closed, adds line, wire_messages.csv, 2550,40048,201,new,9
+a wire message after its session closed, must break, Every event falls inside an open interval
+a wire message after its session closed, must explain, '"wire_messages.csv:10, breaks, Every event falls inside an open interval", holds because, "not wire_messages.csv:10, falls inside an interval of, engine_connections.csv"'
+
+the knowledge, shows, [row] falls inside [entity]
+
+engine_messages.csv, is, a source
+engine_messages.csv, gives the time in, at
+engine_messages.csv, gives the entity in, connection
+engine_messages.csv, calls its entities, "engine messages of connection "
+engine_messages.csv, gives the sequence in, seq
+engine_messages.csv, gives the key part, order, order
+engine_messages.csv, gives the key part, kind, kind
+
+wire_messages.csv, is, a source
+wire_messages.csv, gives the time in, seen
+wire_messages.csv, gives the key part, order, order
+wire_messages.csv, gives the key part, kind, kind
+wire_messages.csv, gives the duplicate key in, packet
+wire_messages.csv, gives the interval key in, src_port
+wire_messages.csv, must fall inside the intervals of, engine_connections.csv
+
+messages, is, a reconciliation
+messages, has the golden view, engine_messages.csv
+messages, checks, wire_messages.csv
+messages, allows a time difference of, 5
+messages, does not cover the golden rows with, connection, 49
 
 [row], has the key value, [part], [value]
     if [row], is a row of, [source]
@@ -505,7 +557,7 @@ connections, allows a time difference of, 5
     and [other source], has the key part, [part]
     and not [source], has the key part, [part]
 
-a key part one view lacks, adds line, spec.plain, "wire_flows.csv, gives the key part, flag, flag"
+a key part one view lacks, adds line, spec.plain, "wire_messages.csv, gives the key part, packet, packet"
 a key part one view lacks, must break, Every view of a reconciliation gives the same key parts
 a key part one view lacks, must answer, false
 
@@ -531,18 +583,9 @@ a key part one view lacks, must answer, false
     and [row], has the key value, [part], [value]
     and [other row], has the key value, [part], [other value]
     and [value], differs from, [other value]
-[row], is the opposite of, [other row]
-    if [row], could match, [other row]
-    and [row], opens, [entity]
-    and [other row], closes, [other entity]
-[row], is the opposite of, [other row]
-    if [row], could match, [other row]
-    and [row], closes, [entity]
-    and [other row], opens, [other entity]
 [row], matches, [other row]
     if [row], could match, [other row]
     and not [row], differs in a key part from, [other row]
-    and not [row], is the opposite of, [other row]
 [row], is matched in, [reconciliation]
     if [row], matches, [other row]
     and [row], is a row of, [source]
@@ -556,11 +599,50 @@ a key part one view lacks, must answer, false
     and [reconciliation], has the golden view, [source]
     and [reconciliation], checks, [other source]
 
-[row], breaks, No golden event is lost
+[row], is excluded from, [reconciliation]
+    if [reconciliation], does not cover the golden rows with, [column], [value]
+    and [reconciliation], has the golden view, [source]
+    and [row], is a row of, [source]
+    and [row], has the cell, [column], [value]
+[row], is covered by, [reconciliation]
+    if [reconciliation], has the golden view, [source]
+    and [row], is a row of, [source]
+    and not [row], is excluded from, [reconciliation]
+
+[row], has the sequence number, [number]
+    if [row], is a row of, [source]
+    and [source], gives the sequence in, [column]
+    and [row], has the cell, [column], [number]
+[row], comes after, [other row]
+    if [other row], has the sequence number, [other number]
+    and [number], is one more than, [other number]
+    and [row], has the sequence number, [number]
+    and [row], is about, [entity]
+    and [other row], is about, [entity]
+
+[row], is lost in, [reconciliation]
     if [reconciliation], has the golden view, [source]
     and [row], is a row of, [source]
     and [row], is, an event
+    and [row], is covered by, [reconciliation]
     and not [row], is matched in, [reconciliation]
+[row], follows a match in, [reconciliation]
+    if [row], comes after, [other row]
+    and [other row], is matched in, [reconciliation]
+[row], is followed by a match in, [reconciliation]
+    if [other row], comes after, [row]
+    and [other row], is matched in, [reconciliation]
+[row], is dropped in, [reconciliation]
+    if [row], is lost in, [reconciliation]
+    and [row], follows a match in, [reconciliation]
+    and [row], is followed by a match in, [reconciliation]
+
+[row], breaks, No golden event is dropped
+    if [row], is dropped in, [reconciliation]
+No golden event is dropped, is, a warning
+[row], breaks, No golden event is lost
+    if [row], is lost in, [reconciliation]
+    and not [row], is dropped in, [reconciliation]
 No golden event is lost, is, a serious warning
 [row], breaks, No checked event is invented
     if [reconciliation], checks, [source]
@@ -569,19 +651,24 @@ No golden event is lost, is, a serious warning
     and not [row], is matched in, [reconciliation]
 No checked event is invented, is, a serious warning
 
-a wire flow nobody logged, adds line, wire_flows.csv, 8001,40999,SYN,9001
-a wire flow nobody logged, must break, No checked event is invented
-a wire flow nobody logged, must answer, true
-a wire flow nobody logged, must explain, '"wire_flows.csv:8, breaks, No checked event is invented", holds because, "not wire_flows.csv:8, is matched in, connections"'
+a message the wire dropped, adds line, engine_messages.csv, 3100,47,5,104,new
+a message the wire dropped, adds line, engine_messages.csv, 3200,47,6,105,new
+a message the wire dropped, adds line, wire_messages.csv, 3201,40047,105,new,9
+a message the wire dropped, must break, No golden event is dropped
+a message the wire dropped, must answer, true
+a message the wire dropped, must explain, '"engine_messages.csv:11, breaks, No golden event is dropped", holds because, "engine_messages.csv:11, is dropped in, messages"'
 
-a disconnect the wire saw too late, adds line, engine_connections.csv, 8000,49,disconnect,40049
-a disconnect the wire saw too late, adds line, wire_flows.csv, 8100,40049,FIN,9002
-a disconnect the wire saw too late, must break, No golden event is lost
-a disconnect the wire saw too late, must explain, '"engine_connections.csv:8, breaks, No golden event is lost", holds because, "not engine_connections.csv:8, is matched in, connections"'
+a message the wire never saw, adds line, engine_messages.csv, 3100,47,5,104,new
+a message the wire never saw, must break, No golden event is lost
+a message the wire never saw, must explain, '"engine_messages.csv:11, breaks, No golden event is lost", holds because, "not engine_messages.csv:11, is dropped in, messages"'
 
-an open the wire saw as a close, adds line, engine_connections.csv, 7000,50,connect,40050
-an open the wire saw as a close, adds line, wire_flows.csv, 7001,40050,FIN,9003
-an open the wire saw as a close, must break, No golden event is lost
+a wire message nobody logged, adds line, wire_messages.csv, 3500,40047,999,new,9
+a wire message nobody logged, must break, No checked event is invented
+a wire message nobody logged, must answer, true
+a wire message nobody logged, must explain, '"wire_messages.csv:10, breaks, No checked event is invented", holds because, "not wire_messages.csv:10, is matched in, messages"'
+
+a wire message of another kind, adds line, wire_messages.csv, 1101,40047,101,replace,9
+a wire message of another kind, must break, No checked event is invented
 
 the knowledge, shows, [row] matches [other row]
 
@@ -604,9 +691,9 @@ the knowledge, shows, [row] matches [other row]
     if [row], is a duplicate of, [any row]
 No event is duplicated, is, a warning
 
-a duplicated wire event, adds line, wire_flows.csv, 1001,40047,SYN,1
-a duplicated wire event, must break, No event is duplicated
-a duplicated wire event, must answer, true
-a duplicated wire event, must explain, '"wire_flows.csv:8, breaks, No event is duplicated", holds because, "wire_flows.csv:8, is a duplicate of, wire_flows.csv:2"'
+a duplicated wire message, adds line, wire_messages.csv, 1101,40047,101,new,1
+a duplicated wire message, must break, No event is duplicated
+a duplicated wire message, must answer, true
+a duplicated wire message, must explain, '"wire_messages.csv:10, breaks, No event is duplicated", holds because, "wire_messages.csv:10, is a duplicate of, wire_messages.csv:2"'
 
 the knowledge, shows, [row] is a duplicate of [other row]
