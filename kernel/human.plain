@@ -96,6 +96,7 @@ the knowledge is broken, means in mangle, the_knowledge_is_broken().
 "[any file], is, a used file", means in mangle, a_used_file(AnyFile).
 "true, exits with, 0", means in mangle, 'exits_with("true", 0).'
 'a change, adds line, notes.plain, "a, is, a note"', means in mangle, 'adds_line("a change", "notes.plain", "a, is, a note").'
+"a change, adds line, notes.csv, 1,2", means in mangle, 'adds_line("a change", "notes.csv", "1,2").'
 "[file], ends with, [ending]", means in mangle, ":string:ends_with(File, Ending)"
 "[command], starts with, [prefix]", means in mangle, ":string:starts_with(Command, Prefix)"
 "[file], differs from, [other file]", means in mangle, File != OtherFile
@@ -231,7 +232,7 @@ a spec that cannot load, must answer, broken
 [predicate], is, observed
     if [go file], creates fact, [fact pattern]
     and [fact pattern], names, [predicate]
-    and [go file], written in, go
+    and [go file], ends with, .go
 
 the knowledge, shows, [fact pattern]
     if [fact pattern], names, [predicate]
@@ -298,12 +299,20 @@ a row name, is computed as, the file name and a colon and the line number
 a cell value, is computed as, the cell text read as a plain value
 a quoted value, is computed as, a value between double quotes unless it holds a double quote and no single quote and then between single quotes
 a quote inside a quoted value, is computed as, the quote the value is between written twice
+a part of a line, is computed as, the text between two commas that are each followed by a space
+a not condition, is computed as, true when no fact matches it for any value of a blank found nowhere else in its rule
 
 kernel, is tested with, kernel/sample.csv
 kernel, expects, "kernel/sample.csv:2, is a row of, kernel/sample.csv"
 kernel, expects, "kernel/sample.csv:2, has the cell, name, ann"
 kernel, expects, "kernel/sample.csv:2, has the cell, size, 3"
 kernel, rules out, "kernel/sample.csv:1, is a row of, kernel/sample.csv"
+kernel, rules out, "kernel/sample.csv:2, is, a row without a size"
+
+[row], is, a row without a size
+    if [row], is a row of, [any source]
+    and not [row], has the cell, size, [any value]
+the knowledge, shows, [row] is a row without a size
 
 [fact], breaks, Every expected fact holds
     if [any level], expects, [fact]
