@@ -1,140 +1,644 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/csv"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io/fs"
+	"io"
 	"os"
-	"path/filepath"
 	"regexp"
-	"runtime"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
-	"codeberg.org/TauCeti/mangle-go/analysis"
-	"codeberg.org/TauCeti/mangle-go/ast"
-	"codeberg.org/TauCeti/mangle-go/engine"
-	"codeberg.org/TauCeti/mangle-go/factstore"
-	"codeberg.org/TauCeti/mangle-go/parse"
-	"codeberg.org/TauCeti/mangle-go/unionfind"
+	"github.com/google/mangle/analysis"
+	"github.com/google/mangle/ast"
+	mangleengine "github.com/google/mangle/engine"
+	"github.com/google/mangle/factstore"
+	"github.com/google/mangle/parse"
 	_ "modernc.org/sqlite"
 )
 
 const (
-	thisFile       = "engine.go"
-	entryFile      = "spec.plain"
-	changeVariable = "MACHINE_CHANGE"
+	engineFile     = "engine.go"
+	changeVariable = "THIS_RUN_IS_A_CHANGE"
 	plainKind      = "rules and facts"
 	rowsKind       = "a row per line with a cell per column"
-	broken         = "broken"
+	printLanguage  = "plain language"
+	whyPrefix      = "why__"
+	maxRounds      = 32
 )
 
 var (
-	blankShape  = regexp.MustCompile(`^\[([a-z0-9]+(?: [a-z0-9]+)*)\]$`)
-	numberShape = regexp.MustCompile(`^(?:0|-?[1-9][0-9]{0,17})$`)
-	wordsShape  = regexp.MustCompile(`^[a-z][a-z0-9]*(?: [a-z0-9]+)*$`)
-	slotShape   = regexp.MustCompile(`\[([^\[\]]*)\]`)
+	blankPattern  = regexp.MustCompile(`^\[([^\[\]]+)\]$`)
+	numberPattern = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
+	phrasePattern = regexp.MustCompile(`^[a-z][a-z0-9]*( [a-z0-9]+)*$`)
 )
 
-var methods = map[string]string{
-	"a rule id":    "the first 16 hex digits of the sha256 of the rule lines joined by newlines",
-	"a fact id":    "the first 16 hex digits of the sha256 of the fact as one plain line",
-	"a row name":   "the file name and a colon and the line number",
-	"a cell value": "the cell text read as a plain value",
+var knownMethods = map[string]string{
+	"a rule id":       "the first 16 hex digits of the sha256 of the rule lines joined by newlines",
+	"a fact id":       "the first 16 hex digits of the sha256 of the fact as one plain line",
+	"a derivation id": "the first 16 hex digits of the sha256 of the fact and the rule name and the reasons as plain lines joined by newlines",
+	"a row name":      "the file name and a colon and the line number",
+	"a cell value":    "the cell text read as a plain value",
 }
 
-type term struct {
-	blank string
-	text  string
-	num   int64
-	isNum bool
+var rowMeanings = map[string][]string{
+	"every rule":                       {"the rule id", "the rule name", "the file the rule is in", "the number of the line the rule starts on", "the rule lines joined by newlines"},
+	"every fact":                       {"the fact id", "the fact as one plain line", "the file that creates the predicate of the fact"},
+	"every way a rule derives a fact":  {"the derivation id", "the fact id", "the rule name"},
+	"every reason of every derivation": {"the derivation id", "the number of the condition in the rule", "the condition with its blanks filled as one plain line"},
+	"every part the certificate holds": {"what the certificate holds", "the file a hash is of and empty for the answer", "the sha256 of the file in hex or the answer"},
 }
 
-func word(s string) term { return term{text: s} }
+const (
+	hashPart   = "the hash of every file engine.go loads"
+	answerPart = "the answer"
+)
 
-func count(n int64) term { return term{num: n, isNum: true} }
+type Value struct {
+	Num bool
+	N   int64
+	S   string
+}
 
-func plainValue(s string) term {
-	if numberShape.MatchString(s) {
+func text(s string) Value  { return Value{S: s} }
+func number(n int64) Value { return Value{Num: true, N: n} }
+func (v Value) key() string {
+	if v.Num {
+		return "n" + strconv.FormatInt(v.N, 10)
+	}
+	return "s" + v.S
+}
+
+func (v Value) plain() string {
+	if v.Num {
+		return strconv.FormatInt(v.N, 10)
+	}
+	return v.S
+}
+
+func plainValue(s string) Value {
+	if numberPattern.MatchString(s) {
 		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-			return count(n)
+			return number(n)
 		}
 	}
-	return word(s)
+	return text(s)
 }
 
-func (t term) value() string {
-	if t.isNum {
-		return strconv.FormatInt(t.num, 10)
-	}
-	return t.text
+type Term struct {
+	Blank string
+	Val   Value
 }
 
-func (t term) plain() string {
-	switch {
-	case t.blank != "":
-		return "[" + t.blank + "]"
-	case t.isNum:
-		return strconv.FormatInt(t.num, 10)
-	}
-	return quoted(t.text)
+type Atom struct {
+	Pred   string
+	IsForm bool
+	Args   []Term
 }
 
-func (t term) mangle() string {
-	switch {
-	case t.blank != "":
-		return variable(t.blank)
-	case t.isNum:
-		return strconv.FormatInt(t.num, 10)
-	}
-	return ast.String(t.text).String()
+type Cond struct {
+	Neg  bool
+	Atom Atom
 }
 
-func (t term) constant() ast.Constant {
-	if t.isNum {
-		return ast.Number(t.num)
-	}
-	return ast.String(t.text)
+type Rule struct {
+	Name    string
+	File    string
+	Line    int
+	Order   int
+	Lines   []string
+	Head    Atom
+	Conds   []Cond
+	Bad     bool
+	Clause  string
+	WhyName string
+	WhyVars []string
 }
 
-func fromMangleTerm(b ast.BaseTerm) term {
-	c, ok := b.(ast.Constant)
-	if !ok {
-		return word(b.String())
-	}
-	switch c.Type {
-	case ast.NumberType:
-		return count(c.NumValue)
-	case ast.StringType:
-		return word(c.Symbol)
-	}
-	return word(c.String())
+type Fact struct {
+	Pred string
+	Args []Value
 }
 
-func quoted(s string) string {
-	if !needsQuotes(s) {
-		return s
+func (f Fact) key() string {
+	parts := []string{f.Pred}
+	for _, a := range f.Args {
+		parts = append(parts, a.key())
 	}
-	if strings.Contains(s, `"`) {
+	return strings.Join(parts, "\x00")
+}
+
+type predInfo struct {
+	IsForm bool
+	Arity  int
+}
+
+type template struct {
+	params []string
+	text   string
+}
+
+type creation struct {
+	file string
+	fact Fact
+}
+
+type Derivation struct {
+	ID      string
+	Fact    Fact
+	Line    string
+	Rule    *Rule
+	Reasons []string
+}
+
+type Model struct {
+	facts map[string][]Fact
+	all   []Fact
+	why   map[string][][]Value
+}
+
+type tablePlan struct {
+	name    string
+	kind    string
+	columns []columnPlan
+}
+
+type columnPlan struct {
+	position int64
+	name     string
+	meaning  string
+}
+
+type storePlan struct {
+	path     string
+	tables   []tablePlan
+	onlyWhen []string
+}
+
+type Engine struct {
+	mu          sync.Mutex
+	entry       string
+	rules       []*Rule
+	contents    map[string][]byte
+	problems    []string
+	problemSeen map[string]bool
+	preds       map[string]predInfo
+	predWhere   map[string]string
+	templates   map[string]template
+	declared    map[string]map[string]bool
+	creations   []creation
+	createdSeen map[string]bool
+	clauses     []ast.Clause
+	patternPred map[string]string
+	positions   map[string]int
+	derivations []Derivation
+	derivedBy   map[string][]int
+	reasonsFor  map[string][]Fact
+}
+
+func newEngine(entry string) *Engine {
+	return &Engine{
+		entry:       entry,
+		contents:    map[string][]byte{},
+		problemSeen: map[string]bool{},
+		preds:       map[string]predInfo{},
+		predWhere:   map[string]string{},
+		templates:   map[string]template{},
+		declared:    map[string]map[string]bool{},
+		createdSeen: map[string]bool{},
+		patternPred: map[string]string{},
+		positions:   map[string]int{},
+		derivedBy:   map[string][]int{},
+		reasonsFor:  map[string][]Fact{},
+	}
+}
+
+func (e *Engine) problem(format string, args ...any) {
+	p := strings.Join(strings.Fields(fmt.Sprintf(format, args...)), " ")
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.problemSeen[p] {
+		return
+	}
+	e.problemSeen[p] = true
+	e.problems = append(e.problems, p)
+}
+
+func (e *Engine) create(file, pred string, args ...Value) {
+	f := Fact{Pred: pred, Args: args}
+	k := file + "\x01" + f.key()
+	if e.createdSeen[k] {
+		return
+	}
+	e.createdSeen[k] = true
+	e.creations = append(e.creations, creation{file, f})
+}
+
+func splitParts(s string) ([]string, error) {
+	var parts []string
+	for {
+		if s == "" {
+			return nil, errors.New("a part is empty")
+		}
+		if s[0] == '"' || s[0] == '\'' {
+			end := strings.IndexByte(s[1:], s[0])
+			if end < 0 {
+				return nil, errors.New("a quote is not closed")
+			}
+			parts = append(parts, s[:end+2])
+			s = s[end+2:]
+			if s == "" {
+				return parts, nil
+			}
+			if !strings.HasPrefix(s, ", ") {
+				return nil, errors.New("a quote is followed by more than a comma")
+			}
+			s = s[2:]
+			continue
+		}
+		k := strings.Index(s, ", ")
+		if k < 0 {
+			return append(parts, s), nil
+		}
+		parts = append(parts, s[:k])
+		s = s[k+2:]
+	}
+}
+
+func parsePart(raw string) (Term, bool, error) {
+	if raw == "" {
+		return Term{}, false, errors.New("a part is empty")
+	}
+	if raw[0] == '"' || raw[0] == '\'' {
+		return Term{Val: text(raw[1 : len(raw)-1])}, false, nil
+	}
+	if m := blankPattern.FindStringSubmatch(raw); m != nil {
+		if !phrasePattern.MatchString(m[1]) {
+			return Term{}, false, fmt.Errorf("the blank %s is not made of lowercase words", raw)
+		}
+		return Term{Blank: m[1]}, false, nil
+	}
+	return Term{Val: plainValue(raw)}, true, nil
+}
+
+func parseStatement(s string) (Atom, error) {
+	raws, err := splitParts(s)
+	if err != nil {
+		return Atom{}, err
+	}
+	terms := make([]Term, len(raws))
+	bare := make([]bool, len(raws))
+	for i, raw := range raws {
+		t, b, err := parsePart(raw)
+		if err != nil {
+			return Atom{}, err
+		}
+		terms[i], bare[i] = t, b
+	}
+	word := func(i int) (string, bool) {
+		if !bare[i] || terms[i].Val.Num {
+			return "", false
+		}
+		return terms[i].Val.S, true
+	}
+	switch len(terms) {
+	case 1:
+		w, ok := word(0)
+		if !ok || !phrasePattern.MatchString(w) {
+			return Atom{}, errors.New("a line with one part must be lowercase words")
+		}
+		return Atom{Pred: w}, nil
+	case 2:
+		return Atom{}, errors.New("a line has two parts, but it needs one part or three or more")
+	}
+	verb, ok := word(1)
+	if !ok || !phrasePattern.MatchString(verb) {
+		return Atom{}, errors.New("the second part of a line must be lowercase words")
+	}
+	if verb == "is" && len(terms) == 3 {
+		if w, ok := word(2); ok {
+			if !phrasePattern.MatchString(w) {
+				return Atom{}, errors.New("what follows is must be lowercase words")
+			}
+			return Atom{Pred: w, IsForm: true, Args: terms[:1]}, nil
+		}
+	}
+	args := append([]Term{terms[0]}, terms[2:]...)
+	return Atom{Pred: verb, Args: args}, nil
+}
+
+func quote(s string) string {
+	if !strings.Contains(s, `"`) {
+		return `"` + s + `"`
+	}
+	if !strings.Contains(s, "'") {
 		return "'" + s + "'"
 	}
 	return `"` + s + `"`
 }
 
-func needsQuotes(s string) bool {
-	return s == "" || strings.Contains(s, ", ") || strings.ContainsAny(s, "\r\n") ||
-		s[0] == '"' || s[0] == '\'' || strings.TrimSpace(s) != s ||
-		numberShape.MatchString(s) || blankShape.MatchString(s) || strings.HasPrefix(s, "not ")
+func bareSafe(s string) bool {
+	return s != "" && strings.TrimSpace(s) == s && s[0] != '"' && s[0] != '\'' &&
+		!strings.Contains(s, ", ") && !strings.ContainsAny(s, "\r\n") &&
+		!blankPattern.MatchString(s) && !numberPattern.MatchString(s)
 }
 
-func variable(blank string) string {
+func renderValue(v Value) string {
+	if v.Num {
+		return strconv.FormatInt(v.N, 10)
+	}
+	if bareSafe(v.S) {
+		return v.S
+	}
+	return quote(v.S)
+}
+
+func renderTerm(t Term) string {
+	if t.Blank != "" {
+		return "[" + t.Blank + "]"
+	}
+	return renderValue(t.Val)
+}
+
+func renderAtom(a Atom, condition bool) string {
+	if len(a.Args) == 0 {
+		return a.Pred
+	}
+	first := renderTerm(a.Args[0])
+	if condition && a.Args[0].Blank == "" && !a.Args[0].Val.Num && strings.HasPrefix(first, "not ") {
+		first = quote(a.Args[0].Val.S)
+	}
+	if a.IsForm {
+		return first + ", is, " + a.Pred
+	}
+	parts := []string{first, a.Pred}
+	for _, t := range a.Args[1:] {
+		parts = append(parts, renderTerm(t))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func renderCond(c Cond) string {
+	s := renderAtom(c.Atom, true)
+	if c.Neg {
+		return "not " + s
+	}
+	return s
+}
+
+func renderRule(r *Rule) []string {
+	lines := []string{renderAtom(r.Head, false)}
+	for i, c := range r.Conds {
+		lead := "    and "
+		if i == 0 {
+			lead = "    if "
+		}
+		lines = append(lines, lead+renderCond(c))
+	}
+	return lines
+}
+
+func parsePlainText(file, content string) ([]*Rule, []string) {
+	var rules []*Rule
+	var problems []string
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	var cur *Rule
+	for i, line := range lines {
+		n := i + 1
+		if strings.TrimSpace(line) == "" {
+			cur = nil
+			continue
+		}
+		if line[0] == ' ' || line[0] == '\t' {
+			if cur == nil {
+				problems = append(problems, fmt.Sprintf("%s:%d is a condition without a rule", file, n))
+				continue
+			}
+			cur.Lines = append(cur.Lines, line)
+			if cur.Bad {
+				continue
+			}
+			t := strings.TrimLeft(line, " \t")
+			var body string
+			switch {
+			case strings.HasPrefix(t, "if "):
+				body = t[3:]
+			case strings.HasPrefix(t, "and "):
+				body = t[4:]
+			default:
+				problems = append(problems, fmt.Sprintf("%s:%d is indented but does not start with if or and", file, n))
+				cur.Bad = true
+				continue
+			}
+			neg := false
+			if strings.HasPrefix(body, "not ") {
+				neg, body = true, body[4:]
+			}
+			a, err := parseStatement(body)
+			if err != nil {
+				problems = append(problems, fmt.Sprintf("%s:%d cannot be read: %v", file, n, err))
+				cur.Bad = true
+				continue
+			}
+			cur.Conds = append(cur.Conds, Cond{Neg: neg, Atom: a})
+			continue
+		}
+		cur = &Rule{Name: fmt.Sprintf("%s:%d", file, n), File: file, Line: n, Lines: []string{line}}
+		rules = append(rules, cur)
+		a, err := parseStatement(line)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s:%d cannot be read: %v", file, n, err))
+			cur.Bad = true
+			continue
+		}
+		cur.Head = a
+	}
+	return rules, problems
+}
+
+func groundFact(a Atom) (Fact, bool) {
+	f := Fact{Pred: a.Pred}
+	for _, t := range a.Args {
+		if t.Blank != "" {
+			return Fact{}, false
+		}
+		f.Args = append(f.Args, t.Val)
+	}
+	return f, true
+}
+
+func hasBlanks(a Atom) bool {
+	for _, t := range a.Args {
+		if t.Blank != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) groundFacts(pred string) []Fact {
+	var out []Fact
+	for _, r := range e.rules {
+		if r.Bad || len(r.Conds) > 0 || r.Head.Pred != pred {
+			continue
+		}
+		if f, ok := groundFact(r.Head); ok {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func (e *Engine) factsOf(m *Model, pred string) []Fact {
+	if m != nil {
+		return m.facts[pred]
+	}
+	return e.groundFacts(pred)
+}
+
+func (e *Engine) load() {
+	queue := []string{e.entry}
+	seen := map[string]bool{}
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		data, err := os.ReadFile(name)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				e.problem("engine.go cannot read %s: %v", name, err)
+			}
+			continue
+		}
+		kind := plainKind
+		if name != e.entry {
+			kind = e.kindOf(name)
+		}
+		switch kind {
+		case plainKind:
+			e.loadPlain(name, string(data))
+		case rowsKind:
+			e.loadRows(name, data)
+		case "":
+			continue
+		default:
+			e.problem("engine.go does not know how to load %s as %s", name, kind)
+			continue
+		}
+		e.contents[name] = data
+		for _, f := range e.groundFacts("loads") {
+			if len(f.Args) == 2 && f.Args[0] == text(engineFile) && !f.Args[1].Num && !seen[f.Args[1].S] {
+				queue = append(queue, f.Args[1].S)
+			}
+		}
+	}
+	if _, ok := e.contents[e.entry]; ok {
+		if kind := e.kindOf(e.entry); kind != "" && kind != plainKind {
+			e.problem("engine.go starts from %s as %s, but it is loaded as %s", e.entry, plainKind, kind)
+		}
+	}
+}
+
+func (e *Engine) kindOf(name string) string {
+	best, language := "", ""
+	for _, f := range e.groundFacts("means") {
+		if len(f.Args) != 2 || f.Args[0].Num || f.Args[1].Num {
+			continue
+		}
+		ending := f.Args[0].S
+		if ending != "" && strings.HasSuffix(name, ending) && len(ending) > len(best) {
+			best, language = ending, f.Args[1].S
+		}
+	}
+	if language == "" {
+		e.problem("engine.go does not know the language of %s", name)
+		return ""
+	}
+	var kinds []string
+	for _, f := range e.groundFacts("is loaded as") {
+		if len(f.Args) == 2 && f.Args[0] == text(language) && !f.Args[1].Num {
+			kinds = append(kinds, f.Args[1].S)
+		}
+	}
+	if len(kinds) != 1 {
+		e.problem("engine.go does not know how %s is loaded", language)
+		return ""
+	}
+	return kinds[0]
+}
+
+func (e *Engine) loadPlain(name, content string) {
+	rules, problems := parsePlainText(name, content)
+	for _, p := range problems {
+		e.problem("%s", p)
+	}
+	for _, r := range rules {
+		r.Order = len(e.rules)
+		e.rules = append(e.rules, r)
+		if r.Bad || len(r.Conds) > 0 {
+			continue
+		}
+		if f, ok := groundFact(r.Head); ok {
+			if _, seen := e.positions[f.key()]; !seen {
+				e.positions[f.key()] = r.Order
+			}
+		}
+	}
+}
+
+func (e *Engine) loadRows(name string, data []byte) {
+	r := csv.NewReader(bytes.NewReader(data))
+	r.FieldsPerRecord = -1
+	header, err := r.Read()
+	if err == io.EOF {
+		return
+	}
+	if err != nil {
+		e.problem("%s cannot be read: %v", name, err)
+		return
+	}
+	for {
+		record, err := r.Read()
+		if err == io.EOF {
+			return
+		}
+		if err != nil {
+			e.problem("%s cannot be read: %v", name, err)
+			return
+		}
+		line, _ := r.FieldPos(0)
+		row := text(fmt.Sprintf("%s:%d", name, line))
+		if len(record) != len(header) {
+			e.problem("%s:%d has %d cells, but the first line names %d columns", name, line, len(record), len(header))
+		}
+		e.create(engineFile, "is a row of", row, text(name))
+		e.create(engineFile, "is on line", row, number(int64(line)))
+		for i, cell := range record {
+			if i < len(header) {
+				e.create(engineFile, "has the cell", row, text(header[i]), plainValue(cell))
+			}
+		}
+	}
+}
+
+func mangleName(phrase string) string {
+	return strings.ReplaceAll(phrase, " ", "_")
+}
+
+func varName(blank string) string {
 	var b strings.Builder
 	for _, w := range strings.Fields(blank) {
 		b.WriteString(strings.ToUpper(w[:1]) + w[1:])
@@ -142,282 +646,43 @@ func variable(blank string) string {
 	return b.String()
 }
 
-func shortHash(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])[:16]
+func mangleString(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\t", `\t`)
+	return `"` + r.Replace(s) + `"`
 }
 
-const (
-	proposition = iota
-	property
-	relation
-)
-
-type form struct {
-	kind  int
-	words string
+func mangleTerm(t Term) string {
+	if t.Blank != "" {
+		return varName(t.Blank)
+	}
+	if t.Val.Num {
+		return strconv.FormatInt(t.Val.N, 10)
+	}
+	return mangleString(t.Val.S)
 }
 
-func (f form) name() string { return strings.ReplaceAll(f.words, " ", "_") }
-
-func predicateKey(name string, arity int) string { return name + "/" + strconv.Itoa(arity) }
-
-type atom struct {
-	form form
-	args []term
-	neg  bool
+func regularMangle(a Atom) string {
+	args := make([]string, len(a.Args))
+	for i, t := range a.Args {
+		args[i] = mangleTerm(t)
+	}
+	return mangleName(a.Pred) + "(" + strings.Join(args, ", ") + ")"
 }
 
-func fact(words string, args ...term) atom {
-	kind := relation
-	switch len(args) {
-	case 0:
-		kind = proposition
-	case 1:
-		kind = property
-	}
-	return atom{form: form{kind, words}, args: args}
-}
-
-func (a atom) key() string { return predicateKey(a.form.name(), len(a.args)) }
-
-func (a atom) plain() string {
-	var s string
-	switch a.form.kind {
-	case proposition:
-		s = a.form.words
-	case property:
-		s = a.args[0].plain() + ", is, " + a.form.words
-	default:
-		parts := []string{a.args[0].plain(), a.form.words}
-		for _, t := range a.args[1:] {
-			parts = append(parts, t.plain())
-		}
-		s = strings.Join(parts, ", ")
-	}
-	if a.neg {
-		return "not " + s
-	}
-	return s
-}
-
-func (a atom) mangle() string {
-	args := make([]string, len(a.args))
-	for i, t := range a.args {
-		args[i] = t.mangle()
-	}
-	return a.form.name() + "(" + strings.Join(args, ", ") + ")"
-}
-
-func (a atom) toMangle() ast.Atom {
-	args := make([]ast.BaseTerm, len(a.args))
-	for i, t := range a.args {
-		args[i] = t.constant()
-	}
-	return ast.NewAtom(a.form.name(), args...)
-}
-
-func (a atom) ground() bool {
-	for _, t := range a.args {
-		if t.blank != "" {
-			return false
-		}
-	}
-	return true
-}
-
-type part struct {
-	text   string
-	quoted bool
-}
-
-func (p part) term() term {
-	if p.quoted {
-		return word(p.text)
-	}
-	if m := blankShape.FindStringSubmatch(p.text); m != nil {
-		return term{blank: m[1]}
-	}
-	return plainValue(p.text)
-}
-
-func splitParts(s string) ([]part, error) {
-	var parts []part
-	for {
-		if s == "" {
-			return nil, errors.New("a part is empty")
-		}
-		if s[0] == '"' || s[0] == '\'' {
-			end := -1
-			for j := 1; j < len(s); j++ {
-				if s[j] == s[0] && (j == len(s)-1 || strings.HasPrefix(s[j+1:], ", ")) {
-					end = j
-					break
-				}
-			}
-			if end < 0 {
-				return nil, fmt.Errorf("the quote in %s is never closed", s)
-			}
-			parts = append(parts, part{s[1:end], true})
-			if end == len(s)-1 {
-				return parts, nil
-			}
-			s = s[end+3:]
-			continue
-		}
-		i := strings.Index(s, ", ")
-		if i == 0 {
-			return nil, errors.New("a part is empty")
-		}
-		if i < 0 {
-			return append(parts, part{s, false}), nil
-		}
-		parts = append(parts, part{s[:i], false})
-		s = s[i+2:]
-	}
-}
-
-func parseAtom(s string) (atom, error) {
-	parts, err := splitParts(s)
-	if err != nil {
-		return atom{}, err
-	}
-	switch len(parts) {
-	case 1:
-		if parts[0].quoted || !wordsShape.MatchString(parts[0].text) {
-			return atom{}, fmt.Errorf("%s is neither a fact nor a proposition", quoted(s))
-		}
-		return atom{form: form{proposition, parts[0].text}}, nil
-	case 2:
-		return atom{}, fmt.Errorf("%s has a subject and a verb but no object", quoted(s))
-	}
-	verb := parts[1]
-	if verb.quoted || !wordsShape.MatchString(verb.text) {
-		return atom{}, fmt.Errorf("%s is not a verb", quoted(verb.text))
-	}
-	if verb.text == "is" && len(parts) == 3 && !parts[2].quoted {
-		object := parts[2].term()
-		if object.blank == "" && !object.isNum {
-			if !wordsShape.MatchString(object.text) {
-				return atom{}, fmt.Errorf("%s cannot name a property", quoted(object.text))
-			}
-			return atom{form: form{property, object.text}, args: []term{parts[0].term()}}, nil
-		}
-	}
-	args := []term{parts[0].term()}
-	for _, p := range parts[2:] {
-		args = append(args, p.term())
-	}
-	return atom{form: form{relation, verb.text}, args: args}, nil
-}
-
-type pattern struct {
-	form  form
-	slots []string
-}
-
-func parsePattern(s string) (pattern, error) {
-	bad := fmt.Errorf("%s is not a fact pattern", quoted(s))
-	locs := slotShape.FindAllStringSubmatchIndex(s, -1)
-	if len(locs) == 0 {
-		if !wordsShape.MatchString(s) {
-			return pattern{}, bad
-		}
-		return pattern{form: form{proposition, s}}, nil
-	}
-	if locs[0][0] != 0 {
-		return pattern{}, bad
-	}
-	var slots []string
-	for _, l := range locs {
-		slot := s[l[2]:l[3]]
-		if !blankShape.MatchString("[" + slot + "]") {
-			return pattern{}, bad
-		}
-		slots = append(slots, slot)
-	}
-	if len(locs) == 1 {
-		tail := s[locs[0][1]:]
-		words := strings.TrimPrefix(tail, " is ")
-		if words == tail || !wordsShape.MatchString(words) {
-			return pattern{}, bad
-		}
-		return pattern{form{property, words}, slots}, nil
-	}
-	between := s[locs[0][1]:locs[1][0]]
-	words := strings.TrimSpace(between)
-	if between != " "+words+" " || !wordsShape.MatchString(words) || locs[len(locs)-1][1] != len(s) {
-		return pattern{}, bad
-	}
-	for i := 2; i < len(locs); i++ {
-		if s[locs[i-1][1]:locs[i][0]] != " " {
-			return pattern{}, bad
-		}
-	}
-	return pattern{form{relation, words}, slots}, nil
-}
-
-func (p pattern) key() string { return predicateKey(p.form.name(), len(p.slots)) }
-
-type rule struct {
-	file  string
-	line  int
-	index int
-	lines []string
-	head  atom
-	conds []atom
-}
-
-func (r *rule) name() string { return fmt.Sprintf("%s:%d", r.file, r.line) }
-
-func (r *rule) id() string { return shortHash(strings.Join(r.lines, "\n")) }
-
-func (r *rule) plain() string {
-	lines := []string{r.head.plain()}
-	for i, c := range r.conds {
-		lead := "    and "
-		if i == 0 {
-			lead = "    if "
-		}
-		lines = append(lines, lead+c.plain())
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (r *rule) blanks() []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, a := range append([]atom{r.head}, r.conds...) {
-		for _, t := range a.args {
-			if t.blank != "" && !seen[t.blank] {
-				seen[t.blank] = true
-				out = append(out, t.blank)
-			}
-		}
-	}
-	return out
-}
-
-type template struct {
-	vars []string
-	text string
-}
-
-func identifierByte(c byte) bool {
+func isIdentByte(c byte) bool {
 	return c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
-func (t template) expand(args []term) string {
-	values := map[string]string{}
-	for i, v := range t.vars {
-		values[v] = args[i].mangle()
+func instantiate(t template, args []Term) string {
+	repl := map[string]string{}
+	for i, p := range t.params {
+		repl[p] = mangleTerm(args[i])
 	}
-	var b strings.Builder
 	s := t.text
+	var b strings.Builder
 	for i := 0; i < len(s); {
 		c := s[i]
-		switch {
-		case c == '"' || c == '\'' || c == '`':
+		if c == '"' || c == '\'' {
 			j := i + 1
 			for j < len(s) && s[j] != c {
 				if s[j] == '\\' {
@@ -425,932 +690,986 @@ func (t template) expand(args []term) string {
 				}
 				j++
 			}
-			j = min(j+1, len(s))
-			b.WriteString(s[i:j])
-			i = j
-		case identifierByte(c):
-			j := i
-			for j < len(s) && identifierByte(s[j]) {
+			if j < len(s) {
 				j++
 			}
-			id := s[i:j]
-			if v, ok := values[id]; ok && (i == 0 || s[i-1] != ':') {
-				b.WriteString(v)
+			if j > len(s) {
+				j = len(s)
+			}
+			b.WriteString(s[i:j])
+			i = j
+			continue
+		}
+		if isIdentByte(c) {
+			j := i
+			for j < len(s) && isIdentByte(s[j]) {
+				j++
+			}
+			word := s[i:j]
+			if r, ok := repl[word]; ok && (i == 0 || s[i-1] != ':') {
+				b.WriteString(r)
 			} else {
-				b.WriteString(id)
+				b.WriteString(word)
 			}
 			i = j
-		default:
-			b.WriteByte(c)
-			i++
+			continue
 		}
+		b.WriteByte(c)
+		i++
 	}
 	return b.String()
 }
 
-type derivation struct {
-	rule    *rule
-	reasons []string
-	negated []bool
+func (e *Engine) isBuiltin(a Atom) bool {
+	_, ok := e.templates[a.Pred]
+	return ok && !a.IsForm
 }
 
-type machine struct {
-	problems  []string
-	rules     []*rule
-	base      []atom
-	baseSeen  map[string]bool
-	returned  []atom
-	extra     []atom
-	forms     map[string]form
-	loaded    []string
-	hashes    map[string]string
-	templates map[string]template
-	ground    map[string]int
-	unit      parse.SourceUnit
-	bodies    []*rule
-	decls     map[ast.PredicateSym]ast.Decl
-	clauses   map[string]*rule
-	derived   map[string][]derivation
-	seen      map[string]bool
-	out       strings.Builder
+func (e *Engine) mangleAtom(a Atom) (string, bool, error) {
+	if t, ok := e.templates[a.Pred]; ok && !a.IsForm {
+		if len(t.params) != len(a.Args) {
+			return "", true, fmt.Errorf("%s needs %d parts besides itself", a.Pred, len(t.params))
+		}
+		return instantiate(t, a.Args), true, nil
+	}
+	return regularMangle(a), false, nil
 }
 
-func newMachine() *machine {
-	return &machine{
-		baseSeen:  map[string]bool{},
-		forms:     map[string]form{},
-		hashes:    map[string]string{},
-		templates: map[string]template{},
-		ground:    map[string]int{},
-		derived:   map[string][]derivation{},
-		seen:      map[string]bool{},
-	}
-}
-
-func (m *machine) problem(format string, args ...any) {
-	m.problems = append(m.problems, fmt.Sprintf(format, args...))
-}
-
-func (m *machine) learn(a atom) {
-	if _, ok := m.forms[a.key()]; !ok {
-		m.forms[a.key()] = a.form
-	}
-}
-
-func (m *machine) add(a atom) {
-	text := a.plain()
-	if m.baseSeen[text] {
-		return
-	}
-	m.baseSeen[text] = true
-	m.learn(a)
-	m.base = append(m.base, a)
-}
-
-func (m *machine) groundFacts(name string, arity int) [][]term {
-	var out [][]term
-	for _, r := range m.rules {
-		if len(r.conds) == 0 && r.head.form.name() == name && len(r.head.args) == arity && r.head.ground() {
-			out = append(out, r.head.args)
-		}
-	}
-	return out
-}
-
-func (m *machine) load() {
-	queue := []string{entryFile}
-	seen := map[string]bool{}
-	for len(queue) > 0 {
-		file := queue[0]
-		queue = queue[1:]
-		if seen[file] || filepath.Base(file) != file {
-			continue
-		}
-		seen[file] = true
-		data, err := os.ReadFile(file)
-		if err != nil {
-			if !errors.Is(err, fs.ErrNotExist) {
-				m.problem("%s cannot read %s: %v", thisFile, file, err)
-			}
-			continue
-		}
-		kind := plainKind
-		if len(m.loaded) > 0 {
-			kind = m.kindOf(file)
-		}
-		m.loaded = append(m.loaded, file)
-		sum := sha256.Sum256(data)
-		m.hashes[file] = hex.EncodeToString(sum[:])
-		switch kind {
-		case plainKind:
-			m.readPlain(file, string(data))
-		case rowsKind:
-			m.readRows(file, string(data))
-		case "":
-			m.problem("%s does not know what language %s is written in", thisFile, file)
-		default:
-			m.problem("%s cannot load %s as %s", thisFile, file, kind)
-		}
-		for _, args := range m.groundFacts("loads", 2) {
-			if args[0].value() == thisFile && !args[1].isNum {
-				queue = append(queue, args[1].text)
-			}
-		}
-	}
-	if len(m.loaded) == 0 {
-		m.problem("%s is not in the folder", entryFile)
-	}
-}
-
-func (m *machine) kindOf(file string) string {
-	ending, language := "", ""
-	for _, args := range m.groundFacts("means", 2) {
-		e := args[0].value()
-		if strings.HasSuffix(file, e) && len(e) > len(ending) {
-			ending, language = e, args[1].value()
-		}
-	}
-	if language == "" {
-		return ""
-	}
-	for _, args := range m.groundFacts("is_loaded_as", 2) {
-		if args[0].value() == language {
-			return args[1].value()
-		}
-	}
-	return ""
-}
-
-func (m *machine) readPlain(file, content string) {
-	var current *rule
-	for i, line := range strings.Split(content, "\n") {
-		where := fmt.Sprintf("%s:%d", file, i+1)
-		if strings.TrimSpace(line) == "" {
-			current = nil
-			continue
-		}
-		if line[0] == ' ' || line[0] == '\t' {
-			text := strings.TrimLeft(line, " \t")
-			var body string
-			switch {
-			case strings.HasPrefix(text, "if "):
-				body = text[3:]
-			case strings.HasPrefix(text, "and "):
-				body = text[4:]
-			default:
-				m.problem("%s: %s is neither a rule nor a condition", where, quoted(line))
-				continue
-			}
-			if current == nil {
-				m.problem("%s: %s is a condition of no rule", where, quoted(line))
-				continue
-			}
-			negated := strings.HasPrefix(body, "not ")
-			body = strings.TrimPrefix(body, "not ")
-			a, err := parseAtom(body)
-			if err != nil {
-				m.problem("%s: %v", where, err)
-				continue
-			}
-			a.neg = negated
-			current.conds = append(current.conds, a)
-			current.lines = append(current.lines, line)
-			continue
-		}
-		a, err := parseAtom(line)
-		if err != nil {
-			m.problem("%s: %v", where, err)
-			current = nil
-			continue
-		}
-		current = &rule{file: file, line: i + 1, index: len(m.rules), lines: []string{line}, head: a}
-		m.rules = append(m.rules, current)
-	}
-}
-
-func (m *machine) readRows(file, content string) {
-	var header []string
-	for i, line := range strings.Split(content, "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		where := fmt.Sprintf("%s:%d", file, i+1)
-		cells, err := csv.NewReader(strings.NewReader(line)).Read()
-		if err != nil {
-			m.problem("%s: %v", where, err)
-			continue
-		}
-		if header == nil {
-			header = cells
-			continue
-		}
-		if len(cells) != len(header) {
-			m.problem("%s: has %d cells but the header names %d columns", where, len(cells), len(header))
-			continue
-		}
-		row := word(where)
-		m.add(fact("is a row of", row, plainValue(file)))
-		for j, column := range header {
-			m.add(fact("has the cell", row, plainValue(column), plainValue(cells[j])))
-		}
-	}
-}
-
-func (m *machine) prepare() {
-	if os.Getenv(changeVariable) != "" {
-		m.add(fact("this run is a change"))
-	}
-	for _, r := range m.rules {
-		m.learn(r.head)
-		for _, c := range r.conds {
-			m.learn(c)
-		}
-		if len(r.conds) == 0 && r.head.ground() {
-			if _, ok := m.ground[r.head.plain()]; !ok {
-				m.ground[r.head.plain()] = r.index
-			}
-		}
-	}
-	for _, args := range m.groundFacts("is_computed_as", 2) {
-		if want, ok := methods[args[0].value()]; !ok || want != args[1].value() {
-			m.problem("%s does not compute %s as %s", thisFile, args[0].value(), args[1].value())
-		}
-	}
-	for _, r := range m.rules {
-		name := word(r.name())
-		predicate := word(r.head.form.name())
-		m.add(fact("has the id", name, plainValue(r.id())))
-		m.add(fact("has a rule for", plainValue(r.file), predicate))
-		m.add(fact("defines", name, predicate))
-		for _, c := range r.conds {
-			m.add(fact("refers to", name, word(c.form.name())))
-		}
-		if r.head.form.kind == relation && r.head.form.words == "breaks" && len(r.head.args) == 2 && r.head.args[1].blank == "" {
-			m.add(fact("lays down", name, r.head.args[1]))
-		}
-		for _, b := range r.blanks() {
-			m.add(fact("has the blank", name, word(b)))
-		}
-		if r.plain() != strings.Join(r.lines, "\n") {
-			m.add(fact("read back differently", name))
-		}
-	}
-	m.findPatterns()
-	m.readTemplates()
-	m.checkCreated(thisFile, m.base)
-}
-
-func (m *machine) declared(file string) map[string]bool {
-	out := map[string]bool{}
-	for _, args := range m.groundFacts("creates_fact", 2) {
-		if args[0].value() != file || args[1].isNum {
-			continue
-		}
-		if p, err := parsePattern(args[1].text); err == nil {
-			out[p.key()] = true
-		}
-	}
-	return out
-}
-
-func (m *machine) checkCreated(file string, atoms []atom) {
-	declared := m.declared(file)
-	reported := map[string]bool{}
-	for _, a := range atoms {
-		if !declared[a.key()] && !reported[a.key()] {
-			reported[a.key()] = true
-			m.problem("%s would create %s facts, but nothing says it creates them", file, quoted(a.form.words))
-		}
-	}
-}
-
-func (m *machine) findPatterns() {
-	positions := map[string][]int{predicateKey("executes_instruction", 2): {1}}
-	for _, args := range m.groundFacts("executes_instruction", 2) {
-		if args[1].isNum {
-			continue
-		}
-		p, err := parsePattern(args[1].text)
-		if err != nil {
-			continue
-		}
-		for i, s := range p.slots {
-			if s == "fact pattern" && !slices.Contains(positions[p.key()], i) {
-				positions[p.key()] = append(positions[p.key()], i)
-			}
-		}
-	}
-	seen := map[string]bool{}
-	for _, r := range m.rules {
-		for _, i := range positions[r.head.key()] {
-			t := r.head.args[i]
-			if t.blank != "" || t.isNum || seen[t.text] {
-				continue
-			}
-			seen[t.text] = true
-			p, err := parsePattern(t.text)
-			if err != nil {
-				m.problem("%s: %v", r.name(), err)
-				continue
-			}
-			m.learn(atom{form: p.form, args: make([]term, len(p.slots))})
-			m.add(fact("names", t, word(p.form.name())))
-			for _, s := range p.slots {
-				m.add(fact("has the slot", t, word(s)))
-			}
-		}
-	}
-}
-
-func (m *machine) readTemplates() {
-	meanings := m.groundFacts("means_in_mangle", 2)
-	for _, args := range meanings {
-		a, err := parseAtom(args[0].value())
-		text := args[1].value()
-		if err != nil || len(a.args) == 0 || strings.HasSuffix(text, ".") {
-			continue
-		}
-		var vars []string
-		distinct := map[string]bool{}
-		for _, t := range a.args {
-			if t.blank == "" || distinct[t.blank] {
-				vars = nil
-				break
-			}
-			distinct[t.blank] = true
-			vars = append(vars, variable(t.blank))
-		}
-		if len(vars) == len(a.args) {
-			m.templates[a.key()] = template{vars, text}
-		}
-	}
-	for _, args := range meanings {
-		line, text := args[0].value(), args[1].value()
-		got, err := m.lineInMangle(line)
-		if err != nil {
-			m.problem("%s cannot read %s: %v", thisFile, quoted(line), err)
-			continue
-		}
-		if got != text {
-			m.problem("%s means in mangle %s, but %s reads it as %s", quoted(line), quoted(text), thisFile, quoted(got))
-		}
-	}
-}
-
-func (m *machine) lineInMangle(line string) (string, error) {
-	a, err := parseAtom(line)
+func (e *Engine) mangleLine(a Atom) (string, error) {
+	s, builtin, err := e.mangleAtom(a)
 	if err != nil {
 		return "", err
 	}
-	if t, ok := m.templates[a.key()]; ok {
-		return t.expand(a.args), nil
+	if builtin {
+		return s, nil
 	}
-	return a.mangle() + ".", nil
+	return s + ".", nil
 }
 
-func (m *machine) clauseText(r *rule) (string, error) {
-	if _, ok := m.templates[r.head.key()]; ok {
-		return "", fmt.Errorf("%s cannot be concluded, it is a builtin", quoted(r.head.form.words))
+func templateLine(a Atom) bool {
+	if a.IsForm || len(a.Args) < 2 {
+		return false
 	}
-	head := r.head.mangle()
-	if len(r.conds) == 0 {
-		return head + ".", nil
-	}
-	var body []string
-	for _, c := range r.conds {
-		if t, ok := m.templates[c.key()]; ok {
-			if c.neg {
-				return "", fmt.Errorf("the builtin %s cannot be negated", quoted(c.form.words))
-			}
-			body = append(body, t.expand(c.args))
-			continue
-		}
-		s := c.mangle()
-		if c.neg {
-			s = "!" + s
-		}
-		body = append(body, s)
-	}
-	return head + " :- " + strings.Join(body, ", ") + ".", nil
-}
-
-func (m *machine) compile() {
-	defined := map[string]bool{}
-	needed := map[string]ast.PredicateSym{}
-	need := func(a atom) {
-		needed[a.key()] = ast.PredicateSym{Symbol: a.form.name(), Arity: len(a.args)}
-	}
-	for _, r := range m.rules {
-		text, err := m.clauseText(r)
-		if err != nil {
-			m.problem("%s: %v", r.name(), err)
-			continue
-		}
-		c, err := parse.Clause(text)
-		if err != nil {
-			m.problem("%s: mangle cannot read %s: %v", r.name(), text, err)
-			continue
-		}
-		m.unit.Clauses = append(m.unit.Clauses, c)
-		defined[r.head.key()] = true
-		if len(r.conds) > 0 {
-			m.bodies = append(m.bodies, r)
-		}
-		for _, c := range r.conds {
-			if _, ok := m.templates[c.key()]; !ok {
-				need(c)
-			}
-		}
-	}
-	for _, a := range m.base {
-		need(a)
-	}
-	need(fact("returned", word(""), word(""), word("")))
-	m.decls = map[ast.PredicateSym]ast.Decl{}
-	for key, sym := range needed {
-		if !defined[key] {
-			m.decls[sym] = ast.NewSyntheticDeclFromSym(sym)
-		}
-	}
-}
-
-type recorder struct{ m *machine }
-
-func (r recorder) RuleFired(clause ast.Clause, head ast.Atom, subst unionfind.UnionFind, _ []ast.Atom) {
-	m := r.m
-	ru := m.clauses[clause.String()]
-	if ru == nil {
-		return
-	}
-	text := m.fromMangle(head).plain()
-	reasons := make([]string, len(ru.conds))
-	negated := make([]bool, len(ru.conds))
-	for i, c := range ru.conds {
-		reasons[i] = instantiate(c, subst).plain()
-		negated[i] = c.neg
-	}
-	key := ru.name() + "\x00" + text + "\x00" + strings.Join(reasons, "\x00")
-	if m.seen[key] {
-		return
-	}
-	m.seen[key] = true
-	m.derived[text] = append(m.derived[text], derivation{ru, reasons, negated})
-}
-
-func (recorder) LetEmit(ast.Clause, ast.Atom, ast.ConstSubstList, ast.Atom) {}
-
-func (recorder) DoEmit(ast.Clause, ast.Atom, []ast.Constant, []ast.Atom, ast.Atom) {}
-
-func instantiate(c atom, subst unionfind.UnionFind) atom {
-	out := atom{form: c.form, neg: c.neg, args: make([]term, len(c.args))}
-	for i, t := range c.args {
-		out.args[i] = t
-		if t.blank == "" {
-			continue
-		}
-		if v, ok := subst.Get(ast.Variable{Symbol: variable(t.blank)}).(ast.Constant); ok {
-			out.args[i] = fromMangleTerm(v)
-		}
-	}
-	return out
-}
-
-func (m *machine) fromMangle(a ast.Atom) atom {
-	key := predicateKey(a.Predicate.Symbol, a.Predicate.Arity)
-	f, ok := m.forms[key]
-	if !ok {
-		f = form{relation, strings.ReplaceAll(a.Predicate.Symbol, "_", " ")}
-	}
-	out := atom{form: f, args: make([]term, len(a.Args))}
-	for i, t := range a.Args {
-		out.args[i] = fromMangleTerm(t)
-	}
-	return out
-}
-
-func (m *machine) evaluate(record bool) (factstore.FactStore, error) {
-	info, err := analysis.AnalyzeOneUnit(m.unit, m.decls)
-	if err != nil {
-		return nil, err
-	}
-	var options []engine.EvalOption
-	if record {
-		if len(info.Rules) != len(m.bodies) {
-			return nil, fmt.Errorf("mangle kept %d of %d rules", len(info.Rules), len(m.bodies))
-		}
-		m.clauses = map[string]*rule{}
-		for i, c := range info.Rules {
-			if _, ok := m.clauses[c.String()]; !ok {
-				m.clauses[c.String()] = m.bodies[i]
-			}
-		}
-		options = append(options, engine.WithDerivationRecorder(recorder{m}))
-	}
-	store := factstore.NewSimpleInMemoryStore()
-	for _, a := range m.base {
-		store.Add(a.toMangle())
-	}
-	for _, a := range m.returned {
-		store.Add(a.toMangle())
-	}
-	if err := engine.EvalProgram(info, store, options...); err != nil {
-		return nil, err
-	}
-	return store, nil
-}
-
-type knowledge struct {
-	m     *machine
-	store factstore.FactStore
-}
-
-func (m *machine) position(text string) int {
-	best := len(m.rules) + 1
-	if i, ok := m.ground[text]; ok {
-		best = i
-	}
-	for _, d := range m.derived[text] {
-		best = min(best, d.rule.index)
-	}
-	return best
-}
-
-func (m *machine) sorted(atoms []atom) []atom {
-	sort.SliceStable(atoms, func(i, j int) bool {
-		a, b := atoms[i].plain(), atoms[j].plain()
-		pa, pb := m.position(a), m.position(b)
-		if pa != pb {
-			return pa < pb
-		}
-		return a < b
-	})
-	return atoms
-}
-
-func (k *knowledge) atoms(name string, arity int) []atom {
-	var out []atom
-	k.store.GetFacts(ast.NewQuery(ast.PredicateSym{Symbol: name, Arity: arity}), func(a ast.Atom) error {
-		out = append(out, k.m.fromMangle(a))
-		return nil
-	})
-	for _, a := range k.m.extra {
-		if a.form.name() == name && len(a.args) == arity {
-			out = append(out, a)
-		}
-	}
-	return k.m.sorted(out)
-}
-
-func (k *knowledge) facts(name string, arity int) [][]term {
-	var out [][]term
-	for _, a := range k.atoms(name, arity) {
-		out = append(out, a.args)
-	}
-	return out
-}
-
-func (k *knowledge) values(name, subject string) []string {
-	var out []string
-	for _, args := range k.facts(name, 2) {
-		if args[0].value() == subject {
-			out = append(out, args[1].value())
-		}
-	}
-	return out
-}
-
-func (m *machine) execute() bool {
-	done := map[string]bool{}
-	for round := 0; ; round++ {
-		if round == 100 {
-			m.problem("the commands never stop calling new commands")
+	seen := map[string]bool{}
+	for _, t := range a.Args {
+		if t.Blank == "" || seen[t.Blank] {
 			return false
 		}
-		store, err := m.evaluate(false)
+		seen[t.Blank] = true
+	}
+	return true
+}
+
+func (e *Engine) learnTemplates() {
+	type pair struct {
+		atom   Atom
+		line   string
+		mangle string
+	}
+	var pairs []pair
+	for _, f := range e.groundFacts("means in mangle") {
+		if len(f.Args) != 2 || f.Args[0].Num || f.Args[1].Num {
+			continue
+		}
+		a, err := parseStatement(f.Args[0].S)
 		if err != nil {
-			m.problem("mangle cannot evaluate the knowledge: %v", err)
-			return false
+			e.problem("the line %s cannot be read: %v", f.Args[0].S, err)
+			continue
 		}
-		k := &knowledge{m, store}
-		var todo []call
-		for _, args := range k.facts("calls", 3) {
-			c := call{args[0], args[1], args[2]}
-			key := c.command.plain() + "\x00" + c.tool.plain() + "\x00" + c.input.plain()
-			if !done[key] {
-				done[key] = true
-				todo = append(todo, c)
+		pairs = append(pairs, pair{a, f.Args[0].S, f.Args[1].S})
+	}
+	for _, p := range pairs {
+		if regularMangle(p.atom)+"." == p.mangle || !templateLine(p.atom) {
+			continue
+		}
+		params := make([]string, len(p.atom.Args))
+		for i, t := range p.atom.Args {
+			params[i] = varName(t.Blank)
+		}
+		if old, ok := e.templates[p.atom.Pred]; ok {
+			if old.text != p.mangle || strings.Join(old.params, ",") != strings.Join(params, ",") {
+				e.problem("%s means two different things in mangle", p.atom.Pred)
 			}
+			continue
 		}
-		if len(todo) == 0 {
-			return true
+		e.templates[p.atom.Pred] = template{params, p.mangle}
+	}
+	for _, p := range pairs {
+		got, err := e.mangleLine(p.atom)
+		if err != nil {
+			e.problem("the line %s cannot be read as mangle: %v", p.line, err)
+			continue
 		}
-		results := make([][]atom, len(todo))
-		slots := make(chan struct{}, runtime.NumCPU())
-		var wg sync.WaitGroup
-		for i, c := range todo {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				slots <- struct{}{}
-				defer func() { <-slots }()
-				results[i] = runCommand(c, k)
-			}()
-		}
-		wg.Wait()
-		for _, r := range results {
-			m.checkCreated(toolsFile, r)
-			m.returned = append(m.returned, r...)
-		}
-		if len(m.problems) > 0 {
-			return false
+		if got != p.mangle {
+			e.problem("engine.go reads the line %s as %s in mangle, not as %s", p.line, got, p.mangle)
 		}
 	}
 }
 
-func (m *machine) explain(k *knowledge, view string) {
-	added := map[string]bool{}
-	for _, p := range k.values("gives_reasons_for", view) {
-		pat, err := parsePattern(p)
-		if err != nil {
-			m.problem("%v", err)
+func parsePattern(p string) (string, bool, []string, error) {
+	type token struct {
+		blank bool
+		s     string
+	}
+	var toks []token
+	rest := p
+	for rest != "" {
+		if rest[0] == '[' {
+			j := strings.IndexByte(rest, ']')
+			if j < 0 {
+				return "", false, nil, errors.New("a blank is not closed")
+			}
+			toks = append(toks, token{true, rest[1:j]})
+			rest = rest[j+1:]
 			continue
 		}
-		for _, a := range k.atoms(pat.form.name(), len(pat.slots)) {
-			text := a.plain()
-			for _, d := range m.derived[text] {
-				for _, reason := range d.reasons {
-					hb := fact("holds because", word(text), word(reason))
-					if !added[hb.plain()] {
-						added[hb.plain()] = true
-						m.learn(hb)
-						m.extra = append(m.extra, hb)
-					}
-				}
-			}
+		j := strings.IndexByte(rest, '[')
+		if j < 0 {
+			j = len(rest)
+		}
+		if w := strings.TrimSpace(rest[:j]); w != "" {
+			toks = append(toks, token{false, w})
+		}
+		rest = rest[j:]
+	}
+	if len(toks) == 1 && !toks[0].blank {
+		if !phrasePattern.MatchString(toks[0].s) {
+			return "", false, nil, errors.New("its words are not lowercase words")
+		}
+		return toks[0].s, false, nil, nil
+	}
+	if len(toks) < 2 || !toks[0].blank || toks[1].blank {
+		return "", false, nil, errors.New("it must start with a blank and then words")
+	}
+	slots := []string{toks[0].s}
+	for _, t := range toks[2:] {
+		if !t.blank {
+			return "", false, nil, errors.New("words may only follow the first blank")
+		}
+		slots = append(slots, t.s)
+	}
+	verb := toks[1].s
+	if !phrasePattern.MatchString(verb) {
+		return "", false, nil, errors.New("its words are not lowercase words")
+	}
+	for _, s := range slots {
+		if !phrasePattern.MatchString(s) {
+			return "", false, nil, fmt.Errorf("the blank [%s] is not made of lowercase words", s)
 		}
 	}
-	m.checkCreated(thisFile, m.extra)
+	if len(slots) == 1 && strings.HasPrefix(verb, "is ") {
+		return verb[3:], true, slots, nil
+	}
+	return verb, false, slots, nil
 }
 
-func (m *machine) print(k *knowledge, view string) {
-	if !slices.Contains(k.values("prints_in", thisFile), "plain language") {
-		m.problem("%s prints only in plain language", thisFile)
+func (e *Engine) register(pred string, isForm bool, arity int, where string) {
+	if old, ok := e.preds[pred]; ok {
+		if old.IsForm != isForm || old.Arity != arity {
+			e.problem("%s uses %s in another shape than %s does", where, pred, e.predWhere[pred])
+		}
 		return
 	}
-	if !slices.Contains(k.values("prints_to", thisFile), "standard output") {
-		m.problem("%s prints only to standard output", thisFile)
-		return
-	}
-	shown := k.values("shows", view)
-	reasoned := map[string]bool{}
-	for _, p := range k.values("gives_reasons_for", view) {
-		reasoned[p] = slices.Contains(shown, p)
-	}
-	because := map[string][]string{}
-	inline := map[string]bool{}
-	for _, a := range m.extra {
-		if a.key() == predicateKey("holds_because", 2) {
-			because[a.args[0].text] = append(because[a.args[0].text], a.plain())
-		}
-	}
-	for _, p := range shown {
-		pat, err := parsePattern(p)
-		if err != nil || !reasoned[p] {
-			continue
-		}
-		for _, a := range k.atoms(pat.form.name(), len(pat.slots)) {
-			for _, line := range because[a.plain()] {
-				inline[line] = true
-			}
-		}
-	}
-	printed := map[string]bool{}
-	emit := func(line string) {
-		if !printed[line] {
-			printed[line] = true
-			m.out.WriteString(line + "\n")
-		}
-	}
-	for _, p := range shown {
-		pat, err := parsePattern(p)
-		if err != nil {
-			m.problem("%v", err)
-			continue
-		}
-		for _, a := range k.atoms(pat.form.name(), len(pat.slots)) {
-			line := a.plain()
-			if inline[line] {
+	e.preds[pred] = predInfo{IsForm: isForm, Arity: arity}
+	e.predWhere[pred] = where
+}
+
+func (e *Engine) readPatterns() {
+	for _, holder := range []string{"executes instruction", "creates fact", "shows", "gives reasons for"} {
+		for _, f := range e.groundFacts(holder) {
+			if len(f.Args) != 2 || f.Args[1].Num {
 				continue
 			}
-			emit(line)
-			if reasoned[p] {
-				for _, reason := range because[line] {
-					emit(reason)
+			pattern := f.Args[1].S
+			pred, isForm, slots, err := parsePattern(pattern)
+			if err != nil {
+				e.problem("the fact pattern %s cannot be read: %v", pattern, err)
+				continue
+			}
+			if holder == "creates fact" && !f.Args[0].Num {
+				if e.declared[f.Args[0].S] == nil {
+					e.declared[f.Args[0].S] = map[string]bool{}
 				}
+				e.declared[f.Args[0].S][pred] = true
+			}
+			if _, done := e.patternPred[pattern]; done {
+				continue
+			}
+			e.patternPred[pattern] = pred
+			e.register(pred, isForm, len(slots), "the fact pattern "+pattern)
+			e.create(engineFile, "names", text(pattern), text(pred))
+			for _, s := range slots {
+				e.create(engineFile, "has the slot", text(pattern), text(s))
 			}
 		}
 	}
 }
 
-func (m *machine) exitCode(k *knowledge, answer string) int {
-	var codes [][]term
-	if k != nil {
-		codes = k.facts("exits_with", 2)
-	} else {
-		codes = m.groundFacts("exits_with", 2)
-	}
-	for _, args := range codes {
-		if args[0].value() == answer && args[1].isNum {
-			return int(args[1].num)
-		}
-	}
-	return 2
+func sha16(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])[:16]
 }
 
-func (m *machine) fail(k *knowledge) int {
-	for _, p := range m.problems {
-		m.out.WriteString(fact("a problem", word(p)).plain() + "\n")
+func (e *Engine) prepare() {
+	e.learnTemplates()
+	e.readPatterns()
+	if os.Getenv(changeVariable) != "" {
+		e.create(engineFile, "this run is a change")
 	}
-	os.Stdout.WriteString(m.out.String())
-	return m.exitCode(k, broken)
-}
-
-func (m *machine) answer(k *knowledge) string {
-	var answers []string
-	for _, args := range k.facts("conforms", 2) {
-		if !slices.Contains(answers, args[1].value()) {
-			answers = append(answers, args[1].value())
-		}
-	}
-	if len(answers) != 1 {
-		m.problem("the folder conforms with %d answers instead of one", len(answers))
-		return broken
-	}
-	return answers[0]
-}
-
-func (m *machine) run() int {
-	m.load()
-	if len(m.problems) > 0 {
-		return m.fail(nil)
-	}
-	m.prepare()
-	m.compile()
-	if len(m.problems) > 0 {
-		return m.fail(nil)
-	}
-	if !m.execute() {
-		return m.fail(nil)
-	}
-	store, err := m.evaluate(true)
-	if err != nil {
-		m.problem("mangle cannot evaluate the knowledge: %v", err)
-		return m.fail(nil)
-	}
-	k := &knowledge{m, store}
-	answer := m.answer(k)
-	views := k.values("prints", thisFile)
-	for _, view := range views {
-		m.explain(k, view)
-	}
-	for _, view := range views {
-		m.print(k, view)
-	}
-	if len(m.problems) > 0 {
-		return m.fail(k)
-	}
-	for _, view := range views {
-		m.publish(k, view, answer)
-	}
-	if len(m.problems) > 0 {
-		return m.fail(k)
-	}
-	os.Stdout.WriteString(m.out.String())
-	return m.exitCode(k, answer)
-}
-
-func (m *machine) publish(k *knowledge, view, answer string) {
-	if when := k.values("is_published_only_when", view); len(when) > 0 && !slices.Contains(when, answer) {
-		return
-	}
-	for _, store := range k.values("is_published_to", view) {
-		paths := k.values("is_the_sqlite_file", store)
-		if len(paths) != 1 {
-			m.problem("%s is not one sqlite file", store)
+	for _, r := range e.rules {
+		if r.Bad {
 			continue
 		}
-		if err := m.write(k, store, paths[0], answer); err != nil {
-			m.problem("%s cannot publish %s to %s: %v", thisFile, view, store, err)
+		e.registerRule(r)
+		e.syntaxFacts(r)
+		e.translate(r)
+	}
+}
+
+func (e *Engine) registerRule(r *Rule) {
+	atoms := []Atom{r.Head}
+	for _, c := range r.Conds {
+		atoms = append(atoms, c.Atom)
+	}
+	for _, a := range atoms {
+		if !e.isBuiltin(a) {
+			e.register(a.Pred, a.IsForm, len(a.Args), r.Name)
 		}
 	}
 }
 
-type row []any
-
-func (m *machine) tables(k *knowledge, store, answer string) (map[string][]string, map[string][]row, error) {
-	schema := map[string][]string{}
-	rows := map[string][]row{}
-	for _, kind := range k.values("keeps", store) {
-		switch kind {
-		case "every rule with its id":
-			schema["rules"] = []string{"name TEXT PRIMARY KEY", "id TEXT NOT NULL", "text TEXT NOT NULL"}
-			inView := map[string]bool{}
-			for _, args := range k.facts("in_the_knowledge_view", 1) {
-				inView[args[0].value()] = true
-			}
-			for _, r := range m.rules {
-				if inView[r.name()] {
-					rows["rules"] = append(rows["rules"], row{r.name(), r.id(), strings.Join(r.lines, "\n")})
-				}
-			}
-		case "every fact with its id":
-			schema["facts"] = []string{"id TEXT PRIMARY KEY", "fact TEXT NOT NULL"}
-			for _, text := range m.allFacts(k) {
-				rows["facts"] = append(rows["facts"], row{shortHash(text), text})
-			}
-		case "every reason for every derived fact":
-			schema["reasons"] = []string{"fact_id TEXT NOT NULL", "fact TEXT NOT NULL", "derivation INTEGER NOT NULL", "rule TEXT NOT NULL", "position INTEGER NOT NULL", "reason TEXT NOT NULL"}
-			m.eachDerivation(func(text string, n int, d derivation) {
-				for i, reason := range d.reasons {
-					rows["reasons"] = append(rows["reasons"], row{shortHash(text), text, n, d.rule.name(), i + 1, reason})
-				}
-			})
-		case "every not condition a derived fact rests on":
-			schema["not_conditions"] = []string{"fact_id TEXT NOT NULL", "fact TEXT NOT NULL", "derivation INTEGER NOT NULL", "rule TEXT NOT NULL", "condition TEXT NOT NULL"}
-			m.eachDerivation(func(text string, n int, d derivation) {
-				for i, reason := range d.reasons {
-					if d.negated[i] {
-						rows["not_conditions"] = append(rows["not_conditions"], row{shortHash(text), text, n, d.rule.name(), reason})
-					}
-				}
-			})
-		default:
-			parts := k.values("holds", kind)
-			if len(parts) == 0 {
-				return nil, nil, fmt.Errorf("%s cannot keep %s", store, kind)
-			}
-			schema["certificate"] = []string{"part TEXT NOT NULL", "subject TEXT NOT NULL", "value TEXT NOT NULL"}
-			for _, part := range parts {
-				switch part {
-				case "the hash of every file engine.go loads":
-					for _, file := range m.loaded {
-						rows["certificate"] = append(rows["certificate"], row{part, file, m.hashes[file]})
-					}
-				case "the answer":
-					rows["certificate"] = append(rows["certificate"], row{part, "the folder", answer})
-				default:
-					return nil, nil, fmt.Errorf("%s cannot hold %s", kind, part)
-				}
-			}
+func (e *Engine) syntaxFacts(r *Rule) {
+	name := text(r.Name)
+	e.create(engineFile, "has the id", name, text(sha16(strings.Join(r.Lines, "\n"))))
+	if strings.Join(renderRule(r), "\n") != strings.Join(r.Lines, "\n") {
+		e.create(engineFile, "read back differently", name)
+	}
+	e.create(engineFile, "has a rule for", text(r.File), text(r.Head.Pred))
+	e.create(engineFile, "defines", name, text(r.Head.Pred))
+	for _, c := range r.Conds {
+		if !e.isBuiltin(c.Atom) {
+			e.create(engineFile, "refers to", name, text(c.Atom.Pred))
 		}
 	}
-	return schema, rows, nil
-}
-
-func (m *machine) eachDerivation(fn func(text string, n int, d derivation)) {
-	texts := make([]string, 0, len(m.derived))
-	for text := range m.derived {
-		texts = append(texts, text)
+	if r.Head.Pred == "breaks" && !r.Head.IsForm && len(r.Head.Args) == 2 && r.Head.Args[1].Blank == "" {
+		e.create(engineFile, "lays down", name, r.Head.Args[1].Val)
 	}
-	sort.Strings(texts)
-	for _, text := range texts {
-		for n, d := range m.derived[text] {
-			fn(text, n+1, d)
+	atoms := []Atom{r.Head}
+	for _, c := range r.Conds {
+		atoms = append(atoms, c.Atom)
+	}
+	for _, a := range atoms {
+		for _, t := range a.Args {
+			if t.Blank != "" {
+				e.create(engineFile, "has the blank", name, text(t.Blank))
+			}
 		}
 	}
 }
 
-func (m *machine) allFacts(k *knowledge) []string {
+func (e *Engine) translate(r *Rule) {
+	head, builtin, err := e.mangleAtom(r.Head)
+	if err == nil && builtin {
+		err = errors.New("its first line is built in, so it cannot be concluded")
+	}
+	if err == nil && len(r.Conds) == 0 && hasBlanks(r.Head) {
+		err = errors.New("a fact cannot have blanks")
+	}
+	var premises []string
+	for _, c := range r.Conds {
+		if err != nil {
+			break
+		}
+		var t string
+		var b bool
+		t, b, err = e.mangleAtom(c.Atom)
+		if err == nil && c.Neg {
+			if b {
+				err = errors.New("a built-in condition cannot be negated")
+			}
+			t = "!" + t
+		}
+		premises = append(premises, t)
+	}
+	if err != nil {
+		e.problem("%s cannot be read as mangle: %v", r.Name, err)
+		return
+	}
+	source := head + "."
+	if len(premises) > 0 {
+		source = head + " :- " + strings.Join(premises, ", ") + "."
+	}
+	clause, err := parse.Clause(source)
+	if err != nil {
+		e.problem("%s cannot be read as mangle: %v", r.Name, err)
+		return
+	}
+	if _, err := analysis.AnalyzeOneUnit(parse.SourceUnit{Clauses: []ast.Clause{clause}}, e.extraDecls(map[ast.PredicateSym]bool{clause.Head.Predicate: true})); err != nil {
+		e.problem("%s cannot be read as mangle: %v", r.Name, err)
+		return
+	}
+	e.clauses = append(e.clauses, clause)
+	r.Clause = source
+	if len(r.Conds) == 0 {
+		return
+	}
 	seen := map[string]bool{}
-	var out []string
-	for _, sym := range k.store.ListPredicates() {
-		k.store.GetFacts(ast.NewQuery(sym), func(a ast.Atom) error {
-			text := m.fromMangle(a).plain()
-			if !seen[text] {
-				seen[text] = true
-				out = append(out, text)
+	var vars, names []string
+	for _, c := range r.Conds {
+		if c.Neg {
+			continue
+		}
+		for _, t := range c.Atom.Args {
+			if t.Blank != "" && !seen[t.Blank] {
+				seen[t.Blank] = true
+				vars = append(vars, t.Blank)
+				names = append(names, varName(t.Blank))
 			}
+		}
+	}
+	whyName := fmt.Sprintf("%s%d", whyPrefix, r.Order)
+	why, err := parse.Clause(whyName + "(" + strings.Join(names, ", ") + ") :- " + strings.Join(premises, ", ") + ".")
+	if err != nil {
+		e.problem("the reasons of %s cannot be read as mangle: %v", r.Name, err)
+		return
+	}
+	e.clauses = append(e.clauses, why)
+	r.WhyName, r.WhyVars = whyName, vars
+}
+
+func (e *Engine) extraDecls(heads map[ast.PredicateSym]bool) map[ast.PredicateSym]ast.Decl {
+	extra := map[ast.PredicateSym]ast.Decl{}
+	for pred, info := range e.preds {
+		sym := ast.PredicateSym{Symbol: mangleName(pred), Arity: info.Arity}
+		if !heads[sym] {
+			extra[sym] = ast.NewSyntheticDeclFromSym(sym)
+		}
+	}
+	return extra
+}
+
+func mangleFact(f Fact) ast.Atom {
+	args := make([]ast.BaseTerm, len(f.Args))
+	for i, v := range f.Args {
+		if v.Num {
+			args[i] = ast.Number(v.N)
+		} else {
+			args[i] = ast.String(v.S)
+		}
+	}
+	return ast.NewAtom(mangleName(f.Pred), args...)
+}
+
+func fromConstant(t ast.BaseTerm) Value {
+	c, ok := t.(ast.Constant)
+	if !ok {
+		return text(t.String())
+	}
+	switch c.Type {
+	case ast.StringType:
+		return text(c.Symbol)
+	case ast.NumberType:
+		return number(c.NumValue)
+	}
+	return text(c.String())
+}
+
+func (e *Engine) evaluate() (*Model, error) {
+	clauses := make([]ast.Clause, 0, len(e.clauses)+len(e.creations))
+	clauses = append(clauses, e.clauses...)
+	for _, c := range e.creations {
+		clauses = append(clauses, ast.Clause{Head: mangleFact(c.fact)})
+	}
+	heads := map[ast.PredicateSym]bool{}
+	for _, c := range clauses {
+		heads[c.Head.Predicate] = true
+	}
+	info, err := analysis.AnalyzeOneUnit(parse.SourceUnit{Clauses: clauses}, e.extraDecls(heads))
+	if err != nil {
+		return nil, err
+	}
+	store := factstore.NewSimpleInMemoryStore()
+	if err := mangleengine.EvalProgram(info, store); err != nil {
+		return nil, err
+	}
+	m := &Model{facts: map[string][]Fact{}, why: map[string][][]Value{}}
+	for _, sym := range store.ListPredicates() {
+		symbol := sym.Symbol
+		err := store.GetFacts(ast.NewQuery(sym), func(a ast.Atom) error {
+			vals := make([]Value, len(a.Args))
+			for i, t := range a.Args {
+				vals[i] = fromConstant(t)
+			}
+			if strings.HasPrefix(symbol, whyPrefix) {
+				m.why[symbol] = append(m.why[symbol], vals)
+				return nil
+			}
+			f := Fact{Pred: strings.ReplaceAll(symbol, "_", " "), Args: vals}
+			m.facts[f.Pred] = append(m.facts[f.Pred], f)
+			m.all = append(m.all, f)
 			return nil
 		})
+		if err != nil {
+			return nil, err
+		}
 	}
-	for _, a := range m.extra {
-		if text := a.plain(); !seen[text] {
-			seen[text] = true
-			out = append(out, text)
+	return m, nil
+}
+
+func (e *Engine) solve() *Model {
+	called := map[string]bool{}
+	for round := 0; round < maxRounds; round++ {
+		m, err := e.evaluate()
+		if err != nil {
+			e.problem("the knowledge cannot be evaluated: %v", err)
+			return nil
+		}
+		var calls []Call
+		for _, f := range m.facts["calls"] {
+			if len(f.Args) != 3 || called[f.key()] {
+				continue
+			}
+			called[f.key()] = true
+			calls = append(calls, Call{Command: f.Args[0], Tool: f.Args[1], Input: f.Args[2]})
+		}
+		if len(calls) == 0 {
+			return m
+		}
+		sort.Slice(calls, func(i, j int) bool {
+			return lessValues([]Value{calls[i].Command, calls[i].Tool, calls[i].Input}, []Value{calls[j].Command, calls[j].Tool, calls[j].Input})
+		})
+		e.callTools(calls, m)
+	}
+	e.problem("the commands still change after %d rounds", maxRounds)
+	return nil
+}
+
+func fill(a Atom, bind map[string]Value) Atom {
+	out := Atom{Pred: a.Pred, IsForm: a.IsForm, Args: make([]Term, len(a.Args))}
+	for i, t := range a.Args {
+		if v, ok := bind[t.Blank]; ok && t.Blank != "" {
+			out.Args[i] = Term{Val: v}
+		} else {
+			out.Args[i] = t
+		}
+	}
+	return out
+}
+
+func (e *Engine) predShape(pred string, arity int) Atom {
+	info, ok := e.preds[pred]
+	return Atom{Pred: pred, IsForm: ok && info.IsForm && arity == 1}
+}
+
+func (e *Engine) line(f Fact) string {
+	a := e.predShape(f.Pred, len(f.Args))
+	for _, v := range f.Args {
+		a.Args = append(a.Args, Term{Val: v})
+	}
+	return renderAtom(a, false)
+}
+
+func (e *Engine) derive(m *Model) {
+	seen := map[string]bool{}
+	add := func(f Fact, r *Rule, reasons []string) {
+		line := e.line(f)
+		id := sha16(strings.Join(append([]string{line, r.Name}, reasons...), "\n"))
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		e.derivedBy[f.key()] = append(e.derivedBy[f.key()], len(e.derivations))
+		e.derivations = append(e.derivations, Derivation{ID: id, Fact: f, Line: line, Rule: r, Reasons: reasons})
+	}
+	for _, r := range e.rules {
+		if r.Bad || r.Clause == "" {
+			continue
+		}
+		if len(r.Conds) == 0 {
+			if f, ok := groundFact(r.Head); ok {
+				add(f, r, nil)
+			}
+			continue
+		}
+		tuples := m.why[r.WhyName]
+		sort.Slice(tuples, func(i, j int) bool { return lessValues(tuples[i], tuples[j]) })
+		for _, tuple := range tuples {
+			bind := map[string]Value{}
+			for i, b := range r.WhyVars {
+				if i < len(tuple) {
+					bind[b] = tuple[i]
+				}
+			}
+			f, ok := groundFact(fill(r.Head, bind))
+			if !ok {
+				continue
+			}
+			reasons := make([]string, len(r.Conds))
+			for i, c := range r.Conds {
+				reasons[i] = renderCond(Cond{Neg: c.Neg, Atom: fill(c.Atom, bind)})
+			}
+			add(f, r, reasons)
+		}
+	}
+}
+
+func (e *Engine) views(m *Model) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, f := range e.factsOf(m, "prints") {
+		if len(f.Args) == 2 && f.Args[0] == text(engineFile) && !f.Args[1].Num && !seen[f.Args[1].S] {
+			seen[f.Args[1].S] = true
+			out = append(out, f.Args[1].S)
 		}
 	}
 	sort.Strings(out)
 	return out
 }
 
-func (m *machine) write(k *knowledge, store, path, answer string) error {
-	schema, rows, err := m.tables(k, store, answer)
-	if err != nil {
-		return err
+func (e *Engine) objects(m *Model, pred, subject string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, f := range e.factsOf(m, pred) {
+		if len(f.Args) == 2 && f.Args[0] == text(subject) && !seen[f.Args[1].key()] {
+			seen[f.Args[1].key()] = true
+			out = append(out, f.Args[1].plain())
+		}
 	}
-	fresh := path + ".new"
-	os.Remove(fresh)
-	db, err := sql.Open("sqlite", fresh)
+	sort.Strings(out)
+	return out
+}
+
+func (e *Engine) explain(m *Model) {
+	for _, view := range e.views(m) {
+		for _, pattern := range e.objects(m, "gives reasons for", view) {
+			pred, ok := e.patternPred[pattern]
+			if !ok {
+				e.problem("engine.go cannot give reasons for %s", pattern)
+				continue
+			}
+			for _, f := range m.facts[pred] {
+				line := e.line(f)
+				if _, done := e.reasonsFor[line]; done {
+					continue
+				}
+				seen := map[string]bool{}
+				var hold []Fact
+				for _, i := range e.derivedBy[f.key()] {
+					for _, reason := range e.derivations[i].Reasons {
+						if seen[reason] {
+							continue
+						}
+						seen[reason] = true
+						h := Fact{Pred: "holds because", Args: []Value{text(line), text(reason)}}
+						e.create(engineFile, h.Pred, h.Args...)
+						hold = append(hold, h)
+					}
+				}
+				e.reasonsFor[line] = hold
+			}
+		}
+	}
+}
+
+func (e *Engine) checkCreations() {
+	for _, c := range e.creations {
+		if !e.declared[c.file][c.fact.Pred] {
+			e.problem("%s creates facts of %s, but nothing says it does", c.file, c.fact.Pred)
+		}
+	}
+	if len(e.problems) > 0 && !e.declared[engineFile]["a problem"] {
+		e.problem("%s creates facts of %s, but nothing says it does", engineFile, "a problem")
+	}
+}
+
+func (e *Engine) checkInstructions(m *Model) {
+	for _, f := range m.facts["is computed as"] {
+		if len(f.Args) != 2 {
+			continue
+		}
+		kind, method := f.Args[0].plain(), f.Args[1].plain()
+		known, ok := knownMethods[kind]
+		if !ok {
+			e.problem("engine.go does not compute %s", kind)
+		} else if known != method {
+			e.problem("engine.go computes %s as %s, not as %s", kind, known, method)
+		}
+	}
+	for _, f := range m.facts["is loaded as"] {
+		if len(f.Args) == 2 && f.Args[1] != text(plainKind) && f.Args[1] != text(rowsKind) {
+			e.problem("engine.go cannot load anything as %s", f.Args[1].plain())
+		}
+	}
+	for _, language := range e.objects(m, "prints in", engineFile) {
+		if language != printLanguage {
+			e.problem("engine.go cannot print in %s", language)
+		}
+	}
+	for _, place := range e.objects(m, "prints to", engineFile) {
+		if place != "standard output" && place != "standard error" {
+			e.problem("engine.go cannot print to %s", place)
+		}
+	}
+}
+
+func (e *Engine) plans(m *Model) []storePlan {
+	var plans []storePlan
+	for _, view := range e.views(m) {
+		for _, store := range e.objects(m, "is published to", view) {
+			paths := e.objects(m, "is the sqlite file", store)
+			if len(paths) != 1 {
+				e.problem("%s must be exactly one sqlite file", store)
+				continue
+			}
+			plan := storePlan{path: paths[0], onlyWhen: e.objects(m, "is published only when", view)}
+			for _, table := range e.objects(m, "has the table", store) {
+				kinds := e.objects(m, "has a row for", table)
+				if len(kinds) != 1 {
+					e.problem("the table %s must have a row for exactly one thing", table)
+					continue
+				}
+				meanings, ok := rowMeanings[kinds[0]]
+				if !ok {
+					e.problem("engine.go cannot make a row for %s", kinds[0])
+					continue
+				}
+				t := tablePlan{name: table, kind: kinds[0]}
+				for _, f := range m.facts["has the column"] {
+					if len(f.Args) != 4 || f.Args[0] != text(table) {
+						continue
+					}
+					if !f.Args[1].Num {
+						e.problem("the column %s of %s has no number", f.Args[2].plain(), table)
+						continue
+					}
+					meaning := f.Args[3].plain()
+					found := false
+					for _, known := range meanings {
+						found = found || known == meaning
+					}
+					if !found {
+						e.problem("engine.go cannot fill a column of %s with %s", table, meaning)
+						continue
+					}
+					t.columns = append(t.columns, columnPlan{f.Args[1].N, f.Args[2].plain(), meaning})
+				}
+				sort.Slice(t.columns, func(i, j int) bool { return t.columns[i].position < t.columns[j].position })
+				for i := 1; i < len(t.columns); i++ {
+					if t.columns[i].position == t.columns[i-1].position {
+						e.problem("the table %s has two columns at %d", table, t.columns[i].position)
+					}
+				}
+				plan.tables = append(plan.tables, t)
+			}
+			plans = append(plans, plan)
+		}
+	}
+	for _, part := range e.objects(m, "holds", "the certificate") {
+		if part != hashPart && part != answerPart {
+			e.problem("engine.go cannot put %s in the certificate", part)
+		}
+	}
+	return plans
+}
+
+func (e *Engine) answer(m *Model) string {
+	if m == nil || len(e.problems) > 0 {
+		return "broken"
+	}
+	seen := map[string]bool{}
+	var answers []string
+	for _, f := range m.facts["conforms"] {
+		if len(f.Args) == 2 && !seen[f.Args[1].key()] {
+			seen[f.Args[1].key()] = true
+			answers = append(answers, f.Args[1].plain())
+		}
+	}
+	if len(answers) != 1 {
+		e.problem("the folder conforms with %d answers instead of one", len(answers))
+		return "broken"
+	}
+	return answers[0]
+}
+
+func (e *Engine) exitCode(m *Model, answer string) (int, bool) {
+	for _, f := range e.factsOf(m, "exits with") {
+		if len(f.Args) == 2 && f.Args[0] == text(answer) && f.Args[1].Num {
+			return int(f.Args[1].N), true
+		}
+	}
+	return 0, false
+}
+
+func (e *Engine) decide(m *Model) (string, int) {
+	answer := e.answer(m)
+	code, ok := e.exitCode(m, answer)
+	if !ok {
+		e.problem("nothing says what %s exits with", answer)
+		answer = "broken"
+		if code, ok = e.exitCode(m, answer); !ok {
+			code = 2
+		}
+	}
+	return answer, code
+}
+
+func (e *Engine) knowledge(m *Model) []Fact {
+	seen := map[string]bool{}
+	var all []Fact
+	add := func(f Fact) {
+		if k := f.key(); !seen[k] {
+			seen[k] = true
+			all = append(all, f)
+		}
+	}
+	if m != nil {
+		for _, f := range m.all {
+			add(f)
+		}
+	}
+	for _, c := range e.creations {
+		add(c.fact)
+	}
+	e.mu.Lock()
+	for _, p := range e.problems {
+		add(Fact{Pred: "a problem", Args: []Value{text(p)}})
+	}
+	e.mu.Unlock()
+	return all
+}
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+func naturalCompare(a, b string) int {
+	for a != "" && b != "" {
+		if isDigit(a[0]) && isDigit(b[0]) {
+			i, j := 0, 0
+			for i < len(a) && isDigit(a[i]) {
+				i++
+			}
+			for j < len(b) && isDigit(b[j]) {
+				j++
+			}
+			na, nb := strings.TrimLeft(a[:i], "0"), strings.TrimLeft(b[:j], "0")
+			if len(na) != len(nb) {
+				if len(na) < len(nb) {
+					return -1
+				}
+				return 1
+			}
+			if na != nb {
+				if na < nb {
+					return -1
+				}
+				return 1
+			}
+			a, b = a[i:], b[j:]
+			continue
+		}
+		if a[0] != b[0] {
+			if a[0] < b[0] {
+				return -1
+			}
+			return 1
+		}
+		a, b = a[1:], b[1:]
+	}
+	return len(a) - len(b)
+}
+
+func compareValue(a, b Value) int {
+	if a.Num && b.Num {
+		switch {
+		case a.N < b.N:
+			return -1
+		case a.N > b.N:
+			return 1
+		}
+		return 0
+	}
+	if a.Num != b.Num {
+		if a.Num {
+			return -1
+		}
+		return 1
+	}
+	return naturalCompare(a.S, b.S)
+}
+
+func lessValues(a, b []Value) bool {
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if c := compareValue(a[i], b[i]); c != 0 {
+			return c < 0
+		}
+	}
+	return len(a) < len(b)
+}
+
+func sortFacts(facts []Fact) []Fact {
+	out := append([]Fact(nil), facts...)
+	sort.SliceStable(out, func(i, j int) bool { return lessValues(out[i].Args, out[j].Args) })
+	return out
+}
+
+func (e *Engine) render(m *Model, all []Fact) string {
+	byPred := map[string][]Fact{}
+	for _, f := range all {
+		byPred[f.Pred] = append(byPred[f.Pred], f)
+	}
+	var b strings.Builder
+	if m == nil {
+		for _, f := range sortFacts(byPred["a problem"]) {
+			b.WriteString(e.line(f) + "\n")
+		}
+		return b.String()
+	}
+	inView := map[string]bool{}
+	for _, f := range m.facts["in the knowledge view"] {
+		if len(f.Args) == 1 {
+			inView[f.Args[0].plain()] = true
+		}
+	}
+	first, prevLong := true, false
+	for _, r := range e.rules {
+		if r.Bad || !inView[r.Name] {
+			continue
+		}
+		long := len(r.Lines) > 1
+		if !first && (long || prevLong) {
+			b.WriteString("\n")
+		}
+		for _, l := range r.Lines {
+			b.WriteString(l + "\n")
+		}
+		first, prevLong = false, long
+	}
+	printed := map[string]bool{}
+	for _, view := range e.views(m) {
+		reasons := map[string]bool{}
+		for _, p := range e.objects(m, "gives reasons for", view) {
+			reasons[p] = true
+		}
+		patterns := e.objects(m, "shows", view)
+		position := func(p string) int {
+			if pos, ok := e.positions[Fact{Pred: "shows", Args: []Value{text(view), text(p)}}.key()]; ok {
+				return pos
+			}
+			return len(e.rules)
+		}
+		sort.SliceStable(patterns, func(i, j int) bool { return position(patterns[i]) < position(patterns[j]) })
+		b.WriteString("\n")
+		for _, p := range patterns {
+			pred, ok := e.patternPred[p]
+			if !ok {
+				continue
+			}
+			for _, f := range sortFacts(byPred[pred]) {
+				if printed[f.key()] {
+					continue
+				}
+				printed[f.key()] = true
+				line := e.line(f)
+				b.WriteString(line + "\n")
+				if !reasons[p] {
+					continue
+				}
+				for _, h := range e.reasonsFor[line] {
+					if !printed[h.key()] {
+						printed[h.key()] = true
+						b.WriteString(e.line(h) + "\n")
+					}
+				}
+			}
+		}
+	}
+	return b.String()
+}
+
+func quoteIdent(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+func (e *Engine) records(m *Model, answer string, all []Fact) (map[string][]map[string]any, error) {
+	recs := map[string][]map[string]any{}
+	for _, r := range e.rules {
+		if r.Bad {
+			continue
+		}
+		joined := strings.Join(r.Lines, "\n")
+		recs["every rule"] = append(recs["every rule"], map[string]any{
+			"the rule id":             sha16(joined),
+			"the rule name":           r.Name,
+			"the file the rule is in": r.File,
+			"the number of the line the rule starts on": int64(r.Line),
+			"the rule lines joined by newlines":         joined,
+		})
+	}
+	creators := map[string][]string{}
+	for _, f := range m.facts["creates"] {
+		if len(f.Args) == 2 {
+			creators[f.Args[1].plain()] = append(creators[f.Args[1].plain()], f.Args[0].plain())
+		}
+	}
+	for _, f := range sortFacts(all) {
+		line := e.line(f)
+		files := creators[f.Pred]
+		sort.Strings(files)
+		recs["every fact"] = append(recs["every fact"], map[string]any{
+			"the fact id":                sha16(line),
+			"the fact as one plain line": line,
+			"the file that creates the predicate of the fact": strings.Join(files, ", "),
+		})
+	}
+	for _, d := range e.derivations {
+		recs["every way a rule derives a fact"] = append(recs["every way a rule derives a fact"], map[string]any{
+			"the derivation id": d.ID,
+			"the fact id":       sha16(d.Line),
+			"the rule name":     d.Rule.Name,
+		})
+		for i, reason := range d.Reasons {
+			recs["every reason of every derivation"] = append(recs["every reason of every derivation"], map[string]any{
+				"the derivation id":                                      d.ID,
+				"the number of the condition in the rule":                int64(i + 1),
+				"the condition with its blanks filled as one plain line": reason,
+			})
+		}
+	}
+	for _, part := range e.objects(m, "holds", "the certificate") {
+		switch part {
+		case hashPart:
+			files := e.objects(m, "loads", engineFile)
+			sort.SliceStable(files, func(i, j int) bool {
+				return e.positions[Fact{Pred: "loads", Args: []Value{text(engineFile), text(files[i])}}.key()] <
+					e.positions[Fact{Pred: "loads", Args: []Value{text(engineFile), text(files[j])}}.key()]
+			})
+			for _, file := range files {
+				data, ok := e.contents[file]
+				if !ok {
+					return nil, fmt.Errorf("engine.go did not load %s, so it cannot hash it", file)
+				}
+				sum := sha256.Sum256(data)
+				recs["every part the certificate holds"] = append(recs["every part the certificate holds"], map[string]any{
+					"what the certificate holds":                     part,
+					"the file a hash is of and empty for the answer": file,
+					"the sha256 of the file in hex or the answer":    hex.EncodeToString(sum[:]),
+				})
+			}
+		case answerPart:
+			recs["every part the certificate holds"] = append(recs["every part the certificate holds"], map[string]any{
+				"what the certificate holds":                     part,
+				"the file a hash is of and empty for the answer": "",
+				"the sha256 of the file in hex or the answer":    answer,
+			})
+		}
+	}
+	return recs, nil
+}
+
+func (e *Engine) publish(plan storePlan, recs map[string][]map[string]any) error {
+	temp := plan.path + ".publishing"
+	os.Remove(temp)
+	defer os.Remove(temp)
+	db, err := sql.Open("sqlite", temp)
 	if err != nil {
 		return err
 	}
@@ -1359,31 +1678,31 @@ func (m *machine) write(k *knowledge, store, path, answer string) error {
 	if err != nil {
 		return err
 	}
-	names := make([]string, 0, len(schema))
-	for name := range schema {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		columns := schema[name]
-		if _, err := tx.Exec("CREATE TABLE " + name + " (" + strings.Join(columns, ", ") + ")"); err != nil {
-			tx.Rollback()
+	defer tx.Rollback()
+	for _, t := range plan.tables {
+		cols := make([]string, len(t.columns))
+		marks := make([]string, len(t.columns))
+		for i, c := range t.columns {
+			cols[i], marks[i] = quoteIdent(c.name), "?"
+		}
+		if _, err := tx.Exec("CREATE TABLE " + quoteIdent(t.name) + " (" + strings.Join(cols, ", ") + ")"); err != nil {
 			return err
 		}
-		marks := strings.TrimSuffix(strings.Repeat("?, ", len(columns)), ", ")
-		insert, err := tx.Prepare("INSERT OR IGNORE INTO " + name + " VALUES (" + marks + ")")
+		stmt, err := tx.Prepare("INSERT INTO " + quoteIdent(t.name) + " VALUES (" + strings.Join(marks, ", ") + ")")
 		if err != nil {
-			tx.Rollback()
 			return err
 		}
-		for _, r := range rows[name] {
-			if _, err := insert.Exec(r...); err != nil {
-				insert.Close()
-				tx.Rollback()
+		for _, rec := range recs[t.kind] {
+			vals := make([]any, len(t.columns))
+			for i, c := range t.columns {
+				vals[i] = rec[c.meaning]
+			}
+			if _, err := stmt.Exec(vals...); err != nil {
+				stmt.Close()
 				return err
 			}
 		}
-		insert.Close()
+		stmt.Close()
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -1391,9 +1710,70 @@ func (m *machine) write(k *knowledge, store, path, answer string) error {
 	if err := db.Close(); err != nil {
 		return err
 	}
-	return os.Rename(fresh, path)
+	return os.Rename(temp, plan.path)
+}
+
+func (e *Engine) shouldPublish(plan storePlan, answer string) bool {
+	if len(plan.onlyWhen) == 0 {
+		return true
+	}
+	for _, a := range plan.onlyWhen {
+		if a == answer {
+			return true
+		}
+	}
+	return false
 }
 
 func main() {
-	os.Exit(newMachine().run())
+	if len(os.Args) != 2 {
+		fmt.Fprintln(os.Stderr, "engine.go needs the file it starts from")
+		os.Exit(2)
+	}
+	os.Exit(run(os.Args[1]))
+}
+
+func run(entry string) int {
+	e := newEngine(entry)
+	e.load()
+	e.prepare()
+	m := e.solve()
+	var plans []storePlan
+	if m != nil {
+		e.derive(m)
+		e.explain(m)
+		e.checkInstructions(m)
+		plans = e.plans(m)
+	}
+	e.checkCreations()
+	answer, code := e.decide(m)
+	if m != nil {
+		for _, plan := range plans {
+			if !e.shouldPublish(plan, answer) {
+				continue
+			}
+			recs, err := e.records(m, answer, e.knowledge(m))
+			if err == nil {
+				err = e.publish(plan, recs)
+			}
+			if err != nil {
+				e.problem("the knowledge view cannot be published to %s: %v", plan.path, err)
+				answer, code = e.decide(m)
+			}
+		}
+	}
+	out := e.render(m, e.knowledge(m))
+	places := []string{"standard output"}
+	if m != nil {
+		places = e.objects(m, "prints to", engineFile)
+	}
+	for _, place := range places {
+		switch place {
+		case "standard output":
+			os.Stdout.WriteString(out)
+		case "standard error":
+			os.Stderr.WriteString(out)
+		}
+	}
+	return code
 }

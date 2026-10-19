@@ -2,221 +2,305 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"go/scanner"
 	"go/token"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
-
-	"mvdan.cc/sh/v3/syntax"
+	"sync"
+	"time"
 )
 
-const toolsFile = "tools.go"
+const (
+	toolsFile   = "tools.go"
+	theFolder   = "the folder"
+	tryTimeout  = 20 * time.Minute
+	shellBreaks = " \t\n;&|()<>`"
+)
 
-type call struct {
-	command term
-	tool    term
-	input   term
+type Call struct {
+	Command Value
+	Tool    Value
+	Input   Value
 }
 
-type result struct {
-	field string
-	value term
+type Returned struct {
+	Field string
+	Value Value
 }
 
-var catalog = map[string]func(term, *knowledge) []result{
-	"list":             list,
-	"find go comments": findGoComments,
-	"find sh comments": findShComments,
-	"try":              try,
-}
+type tool func(e *Engine, m *Model, input Value) []Returned
 
-func runCommand(c call, k *knowledge) []atom {
-	tool, ok := catalog[c.tool.value()]
-	if !ok {
-		return nil
+var tools map[string]tool
+
+func init() {
+	tools = map[string]tool{
+		"list":             listTool,
+		"find go comments": goCommentsTool,
+		"find sh comments": shCommentsTool,
+		"try":              tryTool,
 	}
-	var out []atom
-	for _, r := range tool(c.input, k) {
-		out = append(out, fact("returned", c.command, word(r.field), r.value))
-	}
-	return out
 }
 
-func folderOf(input term) string {
-	if input.value() == "the folder" {
-		return "."
+func (e *Engine) callTools(calls []Call, m *Model) {
+	results := make([][]Returned, len(calls))
+	limit := runtime.NumCPU()
+	if limit < 2 {
+		limit = 2
 	}
-	return input.value()
-}
-
-func list(input term, _ *knowledge) []result {
-	entries, err := os.ReadDir(folderOf(input))
-	if err != nil {
-		return nil
+	gate := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for i, c := range calls {
+		if c.Tool.Num {
+			continue
+		}
+		t, ok := tools[c.Tool.S]
+		if !ok {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, input Value, t tool) {
+			defer wg.Done()
+			gate <- struct{}{}
+			defer func() { <-gate }()
+			results[i] = t(e, m, input)
+		}(i, c.Input, t)
 	}
-	var out []result
-	for _, e := range entries {
-		if !e.IsDir() {
-			out = append(out, result{"file", plainValue(e.Name())})
+	wg.Wait()
+	for i, c := range calls {
+		for _, r := range results[i] {
+			e.create(toolsFile, "returned", c.Command, text(r.Field), r.Value)
 		}
 	}
-	return out
 }
 
-func findGoComments(input term, _ *knowledge) []result {
-	src, err := os.ReadFile(input.value())
+func listTool(e *Engine, m *Model, input Value) []Returned {
+	dir := input.plain()
+	if input == text(theFolder) {
+		dir = "."
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
-	file := token.NewFileSet().AddFile(input.value(), -1, len(src))
+	var out []Returned
+	for _, entry := range entries {
+		out = append(out, Returned{"file", text(entry.Name())})
+	}
+	return out
+}
+
+func goCommentsTool(e *Engine, m *Model, input Value) []Returned {
+	src, err := os.ReadFile(input.plain())
+	if err != nil {
+		return nil
+	}
+	fset := token.NewFileSet()
+	file := fset.AddFile(input.plain(), fset.Base(), len(src))
 	var s scanner.Scanner
 	s.Init(file, src, nil, scanner.ScanComments)
-	var out []result
+	var out []Returned
 	for {
 		_, tok, lit := s.Scan()
 		if tok == token.EOF {
 			return out
 		}
 		if tok == token.COMMENT {
-			out = append(out, result{"comment", word(lit)})
+			out = append(out, Returned{"comment", text(lit)})
 		}
 	}
 }
 
-func findShComments(input term, _ *knowledge) []result {
-	src, err := os.ReadFile(input.value())
+func shCommentsTool(e *Engine, m *Model, input Value) []Returned {
+	src, err := os.ReadFile(input.plain())
 	if err != nil {
 		return nil
 	}
-	var out []result
-	f, err := syntax.NewParser(syntax.KeepComments(true)).Parse(bytes.NewReader(src), input.value())
-	if err != nil {
-		for _, line := range strings.Split(string(src), "\n") {
-			if text := strings.TrimSpace(line); strings.HasPrefix(text, "#") {
-				out = append(out, result{"comment", word(text)})
+	var out []Returned
+	s := string(src)
+	inSingle, inDouble, wordStart := false, false, true
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case inSingle:
+			inSingle = c != '\''
+		case inDouble:
+			if c == '\\' {
+				i++
+			} else if c == '"' {
+				inDouble = false
 			}
+		case c == '\\':
+			i++
+			wordStart = false
+		case c == '\'':
+			inSingle, wordStart = true, false
+		case c == '"':
+			inDouble, wordStart = true, false
+		case c == '#' && wordStart:
+			end := strings.IndexByte(s[i:], '\n')
+			if end < 0 {
+				end = len(s) - i
+			}
+			out = append(out, Returned{"comment", text(strings.TrimRight(s[i:i+end], "\r"))})
+			i += end - 1
+		default:
+			wordStart = strings.IndexByte(shellBreaks, c) >= 0
 		}
-		return out
 	}
-	syntax.Walk(f, func(n syntax.Node) bool {
-		if c, ok := n.(*syntax.Comment); ok {
-			out = append(out, result{"comment", word("#" + c.Text)})
-		}
-		return true
-	})
 	return out
 }
 
-func try(input term, k *knowledge) []result {
+func (e *Engine) before(a, b Fact) bool {
+	pa, oka := e.positions[a.key()]
+	pb, okb := e.positions[b.key()]
+	switch {
+	case oka && okb:
+		return pa < pb
+	case oka != okb:
+		return oka
+	}
+	return lessValues(a.Args, b.Args)
+}
+
+func tryTool(e *Engine, m *Model, change Value) []Returned {
 	if os.Getenv(changeVariable) != "" {
+		e.problem("the change %s cannot try the change %s", os.Getenv(changeVariable), change.plain())
 		return nil
 	}
-	scripts := k.values("runs", "try")
-	if len(scripts) != 1 {
-		return nil
+	var adds []Fact
+	for _, f := range m.facts["adds line"] {
+		if len(f.Args) == 3 && f.Args[0] == change {
+			adds = append(adds, f)
+		}
 	}
-	base, err := os.MkdirTemp("", "try-")
+	sort.SliceStable(adds, func(i, j int) bool { return e.before(adds[i], adds[j]) })
+	runs := e.objects(m, "runs", "try")
+	reads := e.objects(m, "reads", "try")
+	dir, err := os.MkdirTemp("", "change-")
 	if err != nil {
+		e.problem("try cannot make room for %s: %v", change.plain(), err)
 		return nil
 	}
-	defer os.RemoveAll(base)
-	dir := filepath.Join(base, "folder")
-	if err := copyFolder(".", dir); err != nil {
+	defer os.RemoveAll(dir)
+	folder := filepath.Join(dir, "folder")
+	if err := copyFolder(".", folder); err != nil {
+		e.problem("try cannot copy the folder for %s: %v", change.plain(), err)
 		return nil
 	}
-	for _, args := range k.facts("adds_line", 3) {
-		name := args[1].value()
-		if args[0].plain() != input.plain() || filepath.Base(name) != name {
-			continue
-		}
-		if err := appendLine(filepath.Join(dir, name), args[2].value()); err != nil {
+	for _, f := range adds {
+		if err := addLine(dir, folder, f.Args[1].plain(), f.Args[2].plain()); err != nil {
+			e.problem("the change %s cannot add a line to %s: %v", change.plain(), f.Args[1].plain(), err)
 			return nil
 		}
 	}
-	cmd := exec.Command("sh", scripts[0])
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), changeVariable+"="+input.value())
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = os.Stderr
-	code := 0
-	if err := cmd.Run(); err != nil {
+	var out []Returned
+	for _, run := range runs {
+		ctx, cancel := context.WithTimeout(context.Background(), tryTimeout)
+		cmd := exec.CommandContext(ctx, "sh", run)
+		cmd.Dir = folder
+		cmd.Env = append(os.Environ(), changeVariable+"="+change.plain())
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &stdout, &stderr
+		err := cmd.Run()
+		cancel()
 		var exit *exec.ExitError
-		if !errors.As(err, &exit) {
-			return nil
-		}
-		code = exit.ExitCode()
-	}
-	out := []result{{"exit code", count(int64(code))}}
-	for _, place := range k.values("reads", "try") {
-		if place != "standard output" {
+		if err != nil && !errors.As(err, &exit) {
+			e.problem("try cannot run %s for %s: %v", run, change.plain(), err)
 			continue
 		}
-		for _, line := range strings.Split(stdout.String(), "\n") {
-			a, err := parseAtom(line)
-			if err != nil || a.form.kind != relation || len(a.args) != 2 || !a.ground() {
-				continue
+		out = append(out, Returned{"exit code", number(int64(cmd.ProcessState.ExitCode()))})
+		for _, place := range reads {
+			switch place {
+			case "standard output":
+				out = append(out, readView(stdout.String())...)
+			case "standard error":
+				out = append(out, readView(stderr.String())...)
+			default:
+				e.problem("try cannot read %s", place)
 			}
-			switch a.form.words {
-			case "breaks":
-				out = append(out, result{"broke", a.args[1]})
-			case "holds because":
-				out = append(out, result{"explanation", word(a.plain())})
-			}
+		}
+	}
+	return out
+}
+
+func readView(output string) []Returned {
+	rules, _ := parsePlainText("the output", output)
+	var out []Returned
+	for _, r := range rules {
+		if r.Bad || len(r.Conds) > 0 || hasBlanks(r.Head) || r.Head.IsForm || len(r.Head.Args) != 2 {
+			continue
+		}
+		switch r.Head.Pred {
+		case "breaks":
+			out = append(out, Returned{"broke", r.Head.Args[1].Val})
+		case "holds because":
+			out = append(out, Returned{"explanation", text(renderAtom(r.Head, false))})
 		}
 	}
 	return out
 }
 
 func copyFolder(from, to string) error {
-	if err := os.MkdirAll(to, 0o755); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(from)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		info, err := e.Info()
+	return filepath.WalkDir(from, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		src, err := os.Open(filepath.Join(from, e.Name()))
+		target := filepath.Join(to, path)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		src, err := os.Open(path)
 		if err != nil {
 			return err
 		}
-		dst, err := os.OpenFile(filepath.Join(to, e.Name()), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
-		if err != nil {
-			src.Close()
-			return err
-		}
-		_, err = io.Copy(dst, src)
-		src.Close()
-		if closeErr := dst.Close(); err == nil {
-			err = closeErr
-		}
+		defer src.Close()
+		info, err := src.Stat()
 		if err != nil {
 			return err
 		}
-	}
-	return nil
+		dst, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(dst, src); err != nil {
+			dst.Close()
+			return err
+		}
+		return dst.Close()
+	})
 }
 
-func appendLine(path, line string) error {
-	old, err := os.ReadFile(path)
+func addLine(room, folder, file, line string) error {
+	target := filepath.Join(folder, file)
+	if rel, err := filepath.Rel(room, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s is outside the copy of the folder", file)
+	}
+	existing, err := os.ReadFile(target)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	text := string(old)
-	if text != "" && !strings.HasSuffix(text, "\n") {
-		text += "\n"
+	f, err := os.OpenFile(target, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
 	}
-	return os.WriteFile(path, []byte(text+line+"\n"), 0o644)
+	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
+		line = "\n" + line
+	}
+	if _, err := f.WriteString(line + "\n"); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
