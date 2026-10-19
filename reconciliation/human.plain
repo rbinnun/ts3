@@ -73,6 +73,12 @@ a delivery never received, adds line, reconciliation/sent.csv, 350,a,4,x4,35
 a delivery never received, must break, No golden event is lost
 a delivery never received, must explain, '"reconciliation/sent.csv:7, breaks, No golden event is lost", holds because, "not reconciliation/sent.csv:7, is dropped in, deliveries"'
 
+a first delivery never received, adds line, reconciliation/sent.csv, 120,d,1,w1,11
+a first delivery never received, adds line, reconciliation/sent.csv, 130,d,2,w2,12
+a first delivery never received, adds line, reconciliation/received.csv, 131,w2,12
+a first delivery never received, must break, No golden event is lost
+a first delivery never received, must explain, '"reconciliation/sent.csv:7, breaks, No golden event is lost", holds because, "not reconciliation/sent.csv:7, is dropped in, deliveries"'
+
 a delivery nobody sent, adds line, reconciliation/received.csv, 450,q9,99
 a delivery nobody sent, must break, No checked event is invented
 a delivery nobody sent, must answer, true
