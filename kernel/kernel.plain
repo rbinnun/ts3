@@ -1,0 +1,432 @@
+engine.go, loads, kernel.plain
+engine.go, loads, workflow.plain
+engine.go, is, part of the machine
+tools.go, is, part of the machine
+runme.sh, is, part of the machine
+go.mod, is, part of the machine
+go.sum, is, part of the machine
+
+engine.go, executes instruction, [go file] loads [file]
+engine.go, executes instruction, [level] builds on [other level]
+engine.go, executes instruction, [level] is tested with [file]
+engine.go, executes instruction, [fact pattern] is private to its level
+engine.go, executes instruction, [language] is loaded as [kind]
+engine.go, executes instruction, [line] means in mangle [mangle]
+engine.go, executes instruction, [command] calls [tool] [input]
+engine.go, executes instruction, [answer] exits with [code]
+engine.go, executes instruction, [folder] conforms [answer]
+engine.go, executes instruction, [text] is a problem
+engine.go, executes instruction, [go file] prints [knowledge]
+engine.go, executes instruction, [go file] prints in [language]
+engine.go, executes instruction, [go file] prints to [place]
+engine.go, executes instruction, [rule] is in the knowledge
+engine.go, executes instruction, [knowledge] shows [fact pattern]
+engine.go, executes instruction, [knowledge] gives reasons for [fact pattern]
+engine.go, executes instruction, [knowledge] is published to [store]
+engine.go, executes instruction, [knowledge] is published only when [answer]
+engine.go, executes instruction, [store] is the sqlite file [path]
+engine.go, executes instruction, [store] has the table [table]
+engine.go, executes instruction, [table] has a row for [kind]
+engine.go, executes instruction, [table] has the column [position] [column] [meaning]
+engine.go, executes instruction, [certificate] holds [part]
+engine.go, executes instruction, [kind] is computed as [method]
+engine.go, executes instruction, [file] creates fact [fact pattern]
+tools.go, executes instruction, [tool] copies [place]
+tools.go, executes instruction, [tool] runs [file]
+tools.go, executes instruction, [tool] reads [place]
+tools.go, executes instruction, [change] adds line [file] [line]
+tools.go, executes instruction, [fact] holds because [reason]
+runme.sh, executes instruction, [script] proves [place]
+
+tools.go, creates fact, [command] returned [field] [value]
+engine.go, creates fact, this run is a change
+engine.go, creates fact, [text] is a problem
+engine.go, creates fact, [rule] is read back differently
+engine.go, creates fact, [file] has a rule for [predicate]
+engine.go, creates fact, [rule] defines [predicate]
+engine.go, creates fact, [rule] refers to [predicate]
+engine.go, creates fact, [rule] lays down [law]
+engine.go, creates fact, [fact pattern] names [predicate]
+engine.go, creates fact, [rule] has the blank [blank]
+engine.go, creates fact, [fact pattern] has the slot [slot]
+engine.go, creates fact, [fact] holds because [reason]
+engine.go, creates fact, [rule] has the id [id]
+engine.go, creates fact, [row] is a row of [source]
+engine.go, creates fact, [row] has the cell [column] [value]
+engine.go, creates fact, [row] is on line [number]
+engine.go, creates fact, [rule] is in the file [file]
+engine.go, creates fact, [level] is proven
+engine.go, creates fact, [file] is certified
+workflow.plain, creates fact, [command] calls [tool] [input]
+workflow.plain, creates fact, [file] is in the folder
+workflow.plain, creates fact, [file] has the comment [comment]
+
+list, returns, file
+find go comments, returns, comment
+find sh comments, returns, comment
+find go comments, finds comments in, go
+find sh comments, finds comments in, sh
+try, copies, every level folder and every level store
+try, runs, runme.sh
+runme.sh, proves, the level whose folder it is run in
+try, reads, standard output
+try, returns, exit code
+try, returns, broke
+try, returns, explanation
+
+[tool], is, in the catalog
+    if [tool], returns, [any field]
+[command], is, named as a command
+    if [command], calls, [any tool], [any input]
+    and [command], starts with, "command: "
+
+[command], breaks, Every command calls a tool in the catalog
+    if [command], calls, [tool], [any input]
+    and not [tool], is, in the catalog
+[command], breaks, Every command is named as a command
+    if [command], calls, [any tool], [any input]
+    and not [command], is, named as a command
+
+a command with a tool nobody has, adds line, workflow.plain, "command: guess, calls, guess, x"
+a command with a tool nobody has, must break, Every command calls a tool in the catalog
+a command with a tool nobody has, must answer, false
+
+a command not named as a command, adds line, workflow.plain, "list it, calls, list, the folder"
+a command not named as a command, must break, Every command is named as a command
+
+[command], breaks, Every tool returns only what the catalog lists
+    if [command], returned, [field], [any value]
+    and [command], calls, [tool], [any input]
+    and not [tool], returns, [field]
+
+a command with two tools, adds line, workflow.plain, "command: a mix-up, calls, list, the folder"
+a command with two tools, adds line, workflow.plain, "command: a mix-up, calls, find go comments, tools.go"
+a command with two tools, must break, Every tool returns only what the catalog lists
+
+[file], is, a used file
+    if [any file], loads, [file]
+[file], is, a used file
+    if [file], is, part of the machine
+[file], is, a used file
+    if [any level], is tested with, [file]
+
+[file], breaks, Every file is used
+    if [file], is, in the folder
+    and not [file], is, a used file
+
+a file nobody uses, adds line, notes.plain, "a, is, a note"
+a file nobody uses, must break, Every file is used
+a file nobody uses, must explain, '"notes.plain, breaks, Every file is used", holds because, "not notes.plain, is, a used file"'
+
+[file], breaks, Every file engine.go loads is in the folder
+    if engine.go, loads, [file]
+    and not [file], is, in the folder
+    and not [file], is, certified
+
+a missing workflow, adds line, kernel.plain, "engine.go, loads, missing.plain"
+a missing workflow, must break, Every file engine.go loads is in the folder
+
+[file], creates, [predicate]
+    if [file], has a rule for, [predicate]
+[file], creates, [predicate]
+    if [file], creates fact, [fact pattern]
+    and [fact pattern], names, [predicate]
+
+[predicate], is, open
+    if [any level], lets every level state, [fact pattern]
+    and [fact pattern], names, [predicate]
+
+[file], breaks, Each predicate has one creator
+    if [file], creates, [predicate]
+    and [other file], creates, [predicate]
+    and [other file], differs from, [file]
+    and not [predicate], is, open
+
+a workflow that fakes what the tools returned, adds line, workflow.plain, "command: a fake, returned, file, nowhere"
+a workflow that fakes what the tools returned, must break, Each predicate has one creator
+
+a spec that looks for itself, adds line, kernel.plain, "ghost.txt, is, in the folder"
+a spec that looks for itself, must break, Each predicate has one creator
+
+a workflow that makes up a result, adds line, workflow.plain, "a comment, broke, The only knowledge is Datalog"
+a workflow that makes up a result, must break, Each predicate has one creator
+
+"engine.go, loads, kernel.plain", means in mangle, 'loads("engine.go", "kernel.plain").'
+"kernel.plain, is, in the folder", means in mangle, in_the_folder("kernel.plain").
+the knowledge is broken, means in mangle, the_knowledge_is_broken().
+"[any file], is, a used file", means in mangle, a_used_file(AnyFile).
+"true, exits with, 0", means in mangle, 'exits_with("true", 0).'
+'a change, adds line, notes.plain, "a, is, a note"', means in mangle, 'adds_line("a change", "notes.plain", "a, is, a note").'
+"[file], ends with, [ending]", means in mangle, ":string:ends_with(File, Ending)"
+"[command], starts with, [prefix]", means in mangle, ":string:starts_with(Command, Prefix)"
+"[file], differs from, [other file]", means in mangle, File != OtherFile
+"[time], is before, [other time]", means in mangle, ":lt(Time, OtherTime)"
+"[difference], is the difference of, [later], [earlier]", means in mangle, "Difference = fn:minus(Later, Earlier)"
+"[difference], is at most, [tolerance]", means in mangle, ":le(Difference, Tolerance)"
+"[number], is one more than, [other number]", means in mangle, "Number = fn:plus(OtherNumber, 1)"
+"[entity], is the join of, [prefix], [value]", means in mangle, "Entity = fn:string:concat(Prefix, Value)"
+'[command], is the join of, "command: find the comments in ", [file]', means in mangle, 'Command = fn:string:concat("command: find the comments in ", File)'
+
+[rule], breaks, Every rule reads back as written
+    if [rule], is, read back differently
+
+a rule that reads back differently, adds line, kernel.plain, "engine.go, loads, extra.plain"
+a rule that reads back differently, adds line, extra.plain, '"zzz", means, nothing'
+a rule that reads back differently, must break, Every rule reads back as written
+a rule that reads back differently, must explain, '"extra.plain:1, breaks, Every rule reads back as written", holds because, "extra.plain:1, is, read back differently"'
+
+[rule], breaks, Every rule has the id it must have
+    if [rule], must have the id, [id]
+    and not [rule], has the id, [id]
+
+kernel.plain:1, must have the id, cff1d7078cd06b58
+
+a rule with a wrong id, adds line, kernel.plain, "kernel.plain:2, must have the id, ffffffffffffffff"
+a rule with a wrong id, must break, Every rule has the id it must have
+
+.plain, means, plain language
+.go, means, go
+go.mod, means, go module
+go.sum, means, go checksums
+.sh, means, sh
+.csv, means, rows
+
+[file], written in, [language]
+    if [file], is, in the folder
+    and [ending], means, [language]
+    and [file], ends with, [ending]
+[file], is, known
+    if [file], written in, [any language]
+
+[file], breaks, The only knowledge is Datalog
+    if [file], is, in the folder
+    and not [file], is, known
+[file], breaks, The only knowledge is Datalog
+    if [file], has the comment, [any comment]
+
+a file that is not datalog, adds line, notes.txt, a note
+a file that is not datalog, must break, The only knowledge is Datalog
+
+a comment, adds line, tools.go, // a note
+a comment, must break, The only knowledge is Datalog
+a comment, must explain, '"tools.go, breaks, The only knowledge is Datalog", holds because, "tools.go, has the comment, // a note"'
+
+[change], is, a change
+    if [change], adds line, [any file], [any line]
+[change], broke, [law]
+    if [command], calls, try, [change]
+    and [command], returned, broke, [law]
+[change], answered, [answer]
+    if [command], calls, try, [change]
+    and [command], returned, exit code, [code]
+    and [answer], exits with, [code]
+[change], explains, [explanation]
+    if [command], calls, try, [change]
+    and [command], returned, explanation, [explanation]
+[law], is, a law
+    if [any rule], lays down, [law]
+[law], is, a law with a counterexample
+    if [change], broke, [law]
+    and [change], explains, [any explanation]
+[law], is, a law with a counterexample
+    if this run is a change
+    and [any change], must break, [law]
+[law], is, a law with a counterexample
+    if [rule], lays down, [law]
+    and [rule], is in the file, [file]
+    and [file], is, certified
+
+[law], breaks, Every law has a counterexample
+    if [law], is, a law
+    and not [law], is, a law with a counterexample
+[change], breaks, Every change comes out as stated
+    if [change], must break, [law]
+    and not this run is a change
+    and not [change], broke, [law]
+[change], breaks, Every change comes out as stated
+    if [change], must answer, [answer]
+    and not this run is a change
+    and not [change], answered, [answer]
+[change], breaks, Every change comes out as stated
+    if [change], must explain, [explanation]
+    and not this run is a change
+    and not [change], explains, [explanation]
+[change], breaks, Every change comes out as stated
+    if [change], must break, [law]
+    and not [law], is, a law
+
+a law with no counterexample, adds line, workflow.plain, "something, breaks, A law with no counterexample"
+a law with no counterexample, must break, Every law has a counterexample
+
+a change that expects an unknown law, adds line, workflow.plain, "a ghost change, must break, A law nobody laid down"
+a change that expects an unknown law, must break, Every change comes out as stated
+
+[predicate], is, a predicate
+    if [any file], creates, [predicate]
+[predicate], rests on, [other predicate]
+    if [rule], defines, [predicate]
+    and [rule], refers to, [other predicate]
+[predicate], is, a used predicate
+    if [any file], executes instruction, [fact pattern]
+    and [fact pattern], names, [predicate]
+[other predicate], is, a used predicate
+    if [predicate], rests on, [other predicate]
+    and [predicate], is, a used predicate
+[predicate], is, a used predicate
+    if the knowledge, shows, [fact pattern]
+    and [fact pattern], names, [predicate]
+
+[predicate], breaks, Every predicate is used
+    if [predicate], is, a predicate
+    and not [predicate], is, a used predicate
+
+a predicate nobody uses, adds line, kernel.plain, "a, is, lonely"
+a predicate nobody uses, must break, Every predicate is used
+
+[slot], is, a slot name
+    if [any fact pattern], has the slot, [slot]
+ending, is, a slot name
+[blank], is, well named
+    if [blank], is, a slot name
+[blank], is, well named
+    if [slot], is, a slot name
+    and [blank], is the join of, "any ", [slot]
+[blank], is, well named
+    if [slot], is, a slot name
+    and [blank], is the join of, "other ", [slot]
+
+[blank], breaks, Every blank is named after a slot
+    if [any rule], has the blank, [blank]
+    and not [blank], is, well named
+
+a condition with a badly named blank, adds line, kernel.plain, "    if [someone], is, a predicate"
+a condition with a badly named blank, must break, Every blank is named after a slot
+
+the knowledge is broken
+    if [any thing], breaks, [law]
+    and not [law], is, a finding
+[law], is, a finding
+    if [law], is, a warning
+[law], is, a finding
+    if [law], is, a serious warning
+the folder, conforms, false
+    if the knowledge is broken
+the folder, conforms, true
+    if not the knowledge is broken
+true, exits with, 0
+false, exits with, 1
+broken, exits with, 2
+
+a spec that cannot load, adds line, kernel.plain, "a, b"
+a spec that cannot load, must answer, broken
+
+[rule], is, in the knowledge
+    if [rule], defines, [any predicate]
+
+[predicate], is, observed
+    if [go file], creates fact, [fact pattern]
+    and [fact pattern], names, [predicate]
+    and [go file], written in, go
+
+the knowledge, shows, [fact pattern]
+    if [fact pattern], names, [predicate]
+    and [predicate], is, observed
+
+engine.go, prints, the knowledge
+engine.go, prints in, plain language
+engine.go, prints to, standard output
+the knowledge, shows, [folder] conforms [answer]
+the knowledge, shows, [thing] breaks [law]
+the knowledge, shows, [change] broke [law]
+the knowledge, shows, [change] answered [answer]
+the knowledge, shows, [change] explains [explanation]
+the knowledge, shows, [text] is a problem
+the knowledge, gives reasons for, [thing] breaks [law]
+
+a rule id, is computed as, the first 16 hex digits of the sha256 of the rule lines joined by newlines
+a fact id, is computed as, the first 16 hex digits of the sha256 of the fact as one plain line
+a derivation id, is computed as, the first 16 hex digits of the sha256 of the fact and the rule name and the reasons as plain lines joined by newlines
+
+the knowledge, is published to, the store
+the knowledge, is published only when, true
+the store, is the sqlite file, the level store
+the certificate, holds, the name of the level being proven
+the certificate, holds, the hash of every file engine.go loads or the level is tested with
+the certificate, holds, the answer
+
+the store, has the table, rules
+rules, has a row for, every rule
+rules, has the column, 1, id, the rule id
+rules, has the column, 2, name, the rule name
+rules, has the column, 3, file, the file the rule is in
+rules, has the column, 4, line, the number of the line the rule starts on
+rules, has the column, 5, text, the rule lines joined by newlines
+
+the store, has the table, facts
+facts, has a row for, every fact
+facts, has the column, 1, id, the fact id
+facts, has the column, 2, text, the fact as one plain line
+facts, has the column, 3, origin, the go file that observed the fact and derived for every other fact
+
+the store, has the table, derivations
+derivations, has a row for, every way a rule derives a fact
+derivations, has the column, 1, id, the derivation id
+derivations, has the column, 2, fact_id, the fact id
+derivations, has the column, 3, rule, the rule name
+
+the store, has the table, reasons
+reasons, has a row for, every reason of every derivation
+reasons, has the column, 1, derivation_id, the derivation id
+reasons, has the column, 2, position, the number of the condition in the rule
+reasons, has the column, 3, reason, the condition with its blanks filled as one plain line
+
+the store, has the table, certificate
+certificate, has a row for, every part the certificate holds
+certificate, has the column, 1, part, what the certificate holds
+certificate, has the column, 2, subject, the file a hash is of and empty otherwise
+certificate, has the column, 3, value, the sha256 of the file in hex or the level name or the answer
+
+plain language, is loaded as, rules and facts
+rows, is loaded as, a row per line with a cell per column
+a row name, is computed as, the file name and a colon and the line number
+a cell value, is computed as, the cell text read as a plain value
+a fact pattern, is computed as, a value in a place where a rule has the blank [fact pattern]
+a declared predicate, is computed as, every predicate a fact pattern names so that a rule may use it before any fact of it exists
+
+[other level], breaks, Every level a level builds on is proven
+    if [level], builds on, [other level]
+    and not [other level], is, proven
+
+a level built on an unproven level, adds line, kernel.plain, "kernel, builds on, nowhere"
+a level built on an unproven level, must break, Every level a level builds on is proven
+a level built on an unproven level, must answer, false
+
+a level, is computed as, a folder next to the kernel folder named by the folder name
+the level being proven, is computed as, the level whose folder runme.sh is run in
+a level file, is computed as, the level name followed by .plain in the level folder
+a level store, is computed as, the level name followed by .db in the folder that holds the level folders
+a loaded level, is computed as, the level being proven and every level a loaded level builds on where a level with no folder loads nothing
+a loaded file, is computed as, the level file of a loaded level and every file that level file says engine.go loads found in that level's folder
+a tested file, is computed as, a file the level being proven is tested with found in its folder and loaded like a file engine.go loads
+a file name, is computed as, the name of the file without its folder which no two loaded files share
+a proven level, is computed as, a loaded level other than the level being proven whose store holds a certificate with the answer true and with the hash of every file it names as that file is now
+a certified file, is computed as, a file loaded from the folder of a proven level
+
+[change] adds line [file] [line], is, private to its level
+[change] must break [law], is, private to its level
+[change] must answer [answer], is, private to its level
+[change] must explain [explanation], is, private to its level
+a private fact, is computed as, a fact of a private fact pattern which engine.go does not load from a certified file
+
+kernel, lets every level state, [level] lets every level state [fact pattern]
+kernel, lets every level state, [go file] loads [file]
+kernel, lets every level state, [level] builds on [other level]
+kernel, lets every level state, [level] is tested with [file]
+kernel, lets every level state, [slot] is a slot name
+kernel, lets every level state, [law] is a warning
+kernel, lets every level state, [law] is a serious warning
+kernel, lets every level state, [knowledge] shows [fact pattern]
+kernel, lets every level state, [change] adds line [file] [line]
+kernel, lets every level state, [change] must break [law]
+kernel, lets every level state, [change] must answer [answer]
+kernel, lets every level state, [change] must explain [explanation]

@@ -1,0 +1,153 @@
+engine.go, loads, reconciliation.plain
+reconciliation, builds on, events
+reconciliation, is tested with, sent.csv
+reconciliation, is tested with, received.csv
+
+reconciliation, lets every level state, [reconciliation] is a reconciliation
+reconciliation, lets every level state, [reconciliation] has the golden view [source]
+reconciliation, lets every level state, [reconciliation] checks [source]
+reconciliation, lets every level state, [reconciliation] allows a time difference of [tolerance]
+reconciliation, lets every level state, [reconciliation] does not cover the golden rows with [column] [value]
+reconciliation, lets every level state, [source] gives the key part [part] [column]
+
+difference, is, a slot name
+
+[row], has the key value, [part], [value]
+    if [row], is a row of, [source]
+    and [source], gives the key part, [part], [column]
+    and [row], has the cell, [column], [value]
+[source], has the key part, [part]
+    if [source], gives the key part, [part], [any column]
+[reconciliation], has the view, [source]
+    if [reconciliation], has the golden view, [source]
+[reconciliation], has the view, [source]
+    if [reconciliation], checks, [source]
+
+[source], breaks, Every view of a reconciliation gives the same key parts
+    if [reconciliation], has the view, [source]
+    and [reconciliation], has the view, [other source]
+    and [other source], has the key part, [part]
+    and not [source], has the key part, [part]
+
+[row], could match, [other row]
+    if [reconciliation], is, a reconciliation
+    and [reconciliation], has the golden view, [source]
+    and [reconciliation], checks, [other source]
+    and [row], is a row of, [source]
+    and [other row], is a row of, [other source]
+    and [row], is, an event
+    and [other row], is, an event
+    and [row], has the key value, [part], [value]
+    and [other row], has the key value, [part], [value]
+    and [row], happened at, [time]
+    and [other row], happened at, [other time]
+    and [reconciliation], allows a time difference of, [tolerance]
+    and [difference], is the difference of, [time], [other time]
+    and [difference], is at most, [tolerance]
+    and [other difference], is the difference of, [other time], [time]
+    and [other difference], is at most, [tolerance]
+[row], differs in a key part from, [other row]
+    if [row], could match, [other row]
+    and [row], has the key value, [part], [value]
+    and [other row], has the key value, [part], [other value]
+    and [value], differs from, [other value]
+[row], matches, [other row]
+    if [row], could match, [other row]
+    and not [row], differs in a key part from, [other row]
+[row], is matched in, [reconciliation]
+    if [row], matches, [other row]
+    and [row], is a row of, [source]
+    and [other row], is a row of, [other source]
+    and [reconciliation], has the golden view, [source]
+    and [reconciliation], checks, [other source]
+[other row], is matched in, [reconciliation]
+    if [row], matches, [other row]
+    and [row], is a row of, [source]
+    and [other row], is a row of, [other source]
+    and [reconciliation], has the golden view, [source]
+    and [reconciliation], checks, [other source]
+
+the knowledge, shows, [row] matches [other row]
+
+[row], is excluded from, [reconciliation]
+    if [reconciliation], does not cover the golden rows with, [column], [value]
+    and [reconciliation], has the golden view, [source]
+    and [row], is a row of, [source]
+    and [row], has the cell, [column], [value]
+[row], is covered by, [reconciliation]
+    if [reconciliation], has the golden view, [source]
+    and [row], is a row of, [source]
+    and not [row], is excluded from, [reconciliation]
+
+[row], is lost in, [reconciliation]
+    if [reconciliation], has the golden view, [source]
+    and [row], is a row of, [source]
+    and [row], is, an event
+    and [row], is covered by, [reconciliation]
+    and not [row], is matched in, [reconciliation]
+[row], follows a match in, [reconciliation]
+    if [row], comes after, [other row]
+    and [other row], is matched in, [reconciliation]
+[row], is followed by a match in, [reconciliation]
+    if [other row], comes after, [row]
+    and [other row], is matched in, [reconciliation]
+[row], is dropped in, [reconciliation]
+    if [row], is lost in, [reconciliation]
+    and [row], follows a match in, [reconciliation]
+    and [row], is followed by a match in, [reconciliation]
+
+[row], breaks, No golden event is dropped
+    if [row], is dropped in, [reconciliation]
+No golden event is dropped, is, a warning
+[row], breaks, No golden event is lost
+    if [row], is lost in, [reconciliation]
+    and not [row], is dropped in, [reconciliation]
+No golden event is lost, is, a serious warning
+[row], breaks, No checked event is invented
+    if [reconciliation], checks, [source]
+    and [row], is a row of, [source]
+    and [row], is, an event
+    and not [row], is matched in, [reconciliation]
+No checked event is invented, is, a serious warning
+
+sent.csv, is, a source
+sent.csv, gives the time in, at
+sent.csv, gives the entity in, stream
+sent.csv, calls its entities, "stream "
+sent.csv, gives the sequence in, seq
+sent.csv, gives the key part, item, item
+sent.csv, gives the key part, size, size
+
+received.csv, is, a source
+received.csv, gives the time in, at
+received.csv, gives the key part, item, item
+received.csv, gives the key part, size, size
+
+deliveries, is, a reconciliation
+deliveries, has the golden view, sent.csv
+deliveries, checks, received.csv
+deliveries, allows a time difference of, 5
+deliveries, does not cover the golden rows with, stream, c
+
+a key part one view lacks, adds line, reconciliation.plain, "received.csv, gives the key part, colour, colour"
+a key part one view lacks, must break, Every view of a reconciliation gives the same key parts
+a key part one view lacks, must answer, false
+
+a delivery dropped, adds line, sent.csv, 350,a,4,x4,35
+a delivery dropped, adds line, sent.csv, 360,a,5,x5,36
+a delivery dropped, adds line, received.csv, 361,x5,36
+a delivery dropped, must break, No golden event is dropped
+a delivery dropped, must answer, true
+a delivery dropped, must explain, '"sent.csv:7, breaks, No golden event is dropped", holds because, "sent.csv:7, is dropped in, deliveries"'
+
+a delivery never received, adds line, sent.csv, 350,a,4,x4,35
+a delivery never received, must break, No golden event is lost
+a delivery never received, must explain, '"sent.csv:7, breaks, No golden event is lost", holds because, "not sent.csv:7, is dropped in, deliveries"'
+
+a delivery nobody sent, adds line, received.csv, 450,q9,99
+a delivery nobody sent, must break, No checked event is invented
+a delivery nobody sent, must answer, true
+a delivery nobody sent, must explain, '"received.csv:6, breaks, No checked event is invented", holds because, "not received.csv:6, is matched in, deliveries"'
+
+a delivery of another size, adds line, received.csv, 101,x1,11
+a delivery of another size, must break, No checked event is invented
