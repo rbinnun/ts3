@@ -293,9 +293,17 @@ certificate, has the column, 2, subject, the file a hash is of and empty otherwi
 certificate, has the column, 3, value, the sha256 of the file in hex or the level name or the answer
 
 plain language, is loaded as, rules and facts
-rows, is loaded as, a row per line with a cell per column
+rows, is loaded as, a row per line after the first with a cell for each column the first line names
 a row name, is computed as, the file name and a colon and the line number
 a cell value, is computed as, the cell text read as a plain value
+a quoted value, is computed as, a value between double quotes unless it holds a double quote and no single quote and then between single quotes
+a quote inside a quoted value, is computed as, the quote the value is between written twice
+
+kernel, is tested with, kernel/sample.csv
+kernel, expects, "kernel/sample.csv:2, is a row of, kernel/sample.csv"
+kernel, expects, "kernel/sample.csv:2, has the cell, name, ann"
+kernel, expects, "kernel/sample.csv:2, has the cell, size, 3"
+kernel, rules out, "kernel/sample.csv:1, is a row of, kernel/sample.csv"
 
 [fact], breaks, Every expected fact holds
     if [any level], expects, [fact]
@@ -304,6 +312,7 @@ a cell value, is computed as, the cell text read as a plain value
 an expectation that does not hold, adds line, kernel/human.plain, 'kernel, expects, "nothing, is, in the folder"'
 an expectation that does not hold, must break, Every expected fact holds
 an expectation that does not hold, must answer, false
+an expectation that does not hold, must explain, "'""nothing, is, in the folder"", breaks, Every expected fact holds', holds because, '""nothing, is, in the folder"", is, missing'"
 
 [fact], breaks, No ruled out fact holds
     if [any level], rules out, [fact]
