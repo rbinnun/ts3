@@ -1,301 +1,222 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
-	"fmt"
 	"go/scanner"
 	"go/token"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
-	"sync"
 )
-
-const (
-	listTool     = "list"
-	commentsTool = "find go comments"
-	tryTool      = "try"
-)
-
-type call struct {
-	command term
-	tool    string
-	input   term
-}
-
-func (c call) key() string {
-	return atom{name: "calls", args: []term{c.command, textOf(c.tool), c.input}}.line()
-}
 
 type result struct {
 	field string
-	value term
+	value Value
 }
 
-func (s *session) pendingCalls(k *knowledge) []call {
-	var calls []call
-	for _, a := range k.all("calls", 3) {
-		c := call{command: a.args[0], tool: a.args[1].plain(), input: a.args[2]}
-		if !s.called[c.key()] {
-			calls = append(calls, c)
-		}
-	}
-	return calls
+type toolbox struct {
+	m       *Machine
+	adds    map[Value][][2]string
+	catalog map[string]bool
 }
 
-func (s *session) runTools(k *knowledge, calls []call) {
-	results := make([][]result, len(calls))
-	slots := make(chan struct{}, runtime.NumCPU())
-	var wait sync.WaitGroup
-	for i, c := range calls {
-		s.called[c.key()] = true
-		wait.Add(1)
-		go func(i int, c call) {
-			defer wait.Done()
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			found, err := s.use(k, c)
-			if err != nil {
-				s.problem(fmt.Sprintf("%s cannot use %s on %s: %v", c.command.plain(), c.tool, c.input.plain(), err))
-			}
-			results[i] = found
-		}(i, c)
+func (m *Machine) toolbox(db *DB) *toolbox {
+	box := &toolbox{m: m, adds: map[Value][][2]string{}, catalog: map[string]bool{}}
+	for _, b := range db.ask(qAddsLine) {
+		box.adds[b["change"]] = append(box.adds[b["change"]], [2]string{b.text("file"), b.text("line")})
 	}
-	wait.Wait()
-	for i, c := range calls {
-		for _, r := range results[i] {
-			s.observe(atom{name: "returned", args: []term{c.command, textOf(r.field), r.value}}, toolsFile)
-		}
+	for _, b := range db.ask(qCatalog) {
+		box.catalog[b.text("tool")] = true
 	}
+	return box
 }
 
-func (s *session) use(k *knowledge, c call) ([]result, error) {
-	switch c.tool {
-	case listTool:
-		return s.list(c.input.plain())
-	case commentsTool:
-		return s.findGoComments(c.input.plain())
-	case tryTool:
-		return s.try(k, c.input)
+func (box *toolbox) run(tool string, input Value) []result {
+	if !box.catalog[tool] {
+		return nil
 	}
-	return nil, nil
+	switch tool {
+	case "list":
+		return box.list(input)
+	case "find go comments":
+		return box.comments(input)
+	case "try":
+		return box.try(input)
+	}
+	box.m.problem("tools.go has no tool named " + tool)
+	return nil
 }
 
-func (s *session) list(input string) ([]result, error) {
-	directory := s.levelDir
-	if input != theFolder {
-		name, ok := fileName(input)
-		if !ok {
-			return nil, fmt.Errorf("%s is not a folder name", input)
-		}
-		directory = s.path(name)
+func (box *toolbox) list(input Value) []result {
+	if input.Text() != "the folder" {
+		box.m.problem("list lists the folder, not " + input.Text())
+		return nil
 	}
-	var found []result
-	err := filepath.WalkDir(directory, func(file string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
+	var out []result
+	filepath.WalkDir(box.m.levelDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || !d.Type().IsRegular() {
 			return nil
 		}
-		relative, err := filepath.Rel(s.root, file)
-		if err != nil {
-			return err
+		if rel, err := filepath.Rel(box.m.root, p); err == nil {
+			out = append(out, result{"file", Str(filepath.ToSlash(rel))})
 		}
-		found = append(found, result{"file", textOf(filepath.ToSlash(relative))})
 		return nil
 	})
-	return found, err
+	return out
 }
 
-func (s *session) findGoComments(input string) ([]result, error) {
-	name, ok := fileName(input)
+func (box *toolbox) comments(input Value) []result {
+	path, ok := within(box.m.root, input.Text())
 	if !ok {
-		return nil, fmt.Errorf("%s is not a file name", input)
+		box.m.problem(input.Text() + " is not in the folder that holds the level folders")
+		return nil
 	}
-	source, err := os.ReadFile(s.path(name))
+	src, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		box.m.problem(input.Text() + " cannot be read")
+		return nil
 	}
-	files := token.NewFileSet()
-	file := files.AddFile(name, files.Base(), len(source))
-	var reader scanner.Scanner
-	reader.Init(file, source, nil, scanner.ScanComments)
-	var found []result
+	fset := token.NewFileSet()
+	file := fset.AddFile(path, -1, len(src))
+	var s scanner.Scanner
+	s.Init(file, src, nil, scanner.ScanComments)
+	var out []result
 	for {
-		_, kind, literal := reader.Scan()
-		if kind == token.EOF {
-			return found, nil
+		_, tok, lit := s.Scan()
+		if tok == token.EOF {
+			break
 		}
-		if kind == token.COMMENT {
-			text := strings.Join(strings.Fields(strings.ReplaceAll(literal, "\r", "")), " ")
-			found = append(found, result{"comment", textOf(text)})
+		if tok == token.COMMENT {
+			out = append(out, result{"comment", Str(lit)})
 		}
 	}
+	return out
 }
 
-type addition struct {
-	file string
-	line string
-}
-
-func (s *session) additions(k *knowledge, change term) []addition {
-	order := map[string]int{}
-	for i, r := range s.rules {
-		if len(r.conditions) == 0 {
-			if _, ok := order[r.head.line()]; !ok {
-				order[r.head.line()] = i
+func copyTree(from, to string) error {
+	return filepath.WalkDir(from, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(from, p)
+		if err != nil {
+			return err
+		}
+		if rel != "." && filepath.Dir(rel) == "." && strings.HasPrefix(d.Name(), ".") {
+			if d.IsDir() {
+				return filepath.SkipDir
 			}
+			return nil
 		}
-	}
-	var facts []atom
-	for _, a := range k.all("adds line", 3) {
-		if a.args[0] == change {
-			facts = append(facts, a)
-		}
-	}
-	rank := func(a atom) int {
-		if i, ok := order[a.line()]; ok {
-			return i
-		}
-		return len(s.rules)
-	}
-	sort.SliceStable(facts, func(i, j int) bool { return rank(facts[i]) < rank(facts[j]) })
-	var found []addition
-	for _, a := range facts {
-		found = append(found, addition{a.args[1].plain(), a.args[2].plain()})
-	}
-	return found
-}
-
-func copyFolder(from, to string) error {
-	return filepath.WalkDir(from, func(file string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(from, file)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(to, relative)
-		if entry.IsDir() {
+		target := filepath.Join(to, rel)
+		if d.IsDir() {
 			return os.MkdirAll(target, 0o755)
 		}
-		content, err := os.ReadFile(file)
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		data, err := os.ReadFile(p)
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(target, content, 0o644)
+		return os.WriteFile(target, data, 0o644)
 	})
 }
 
-func appendLine(root, file, line string) error {
-	name, ok := fileName(file)
-	if !ok {
-		return fmt.Errorf("%s is not a file name", file)
-	}
-	target := filepath.Join(root, filepath.FromSlash(name))
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+func appendLine(path, line string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	existing, err := os.ReadFile(target)
+	old, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	if len(existing) > 0 && existing[len(existing)-1] != '\n' {
-		line = "\n" + line
+	if len(old) > 0 && old[len(old)-1] != '\n' {
+		old = append(old, '\n')
 	}
-	opened, err := os.OpenFile(target, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	if _, err := opened.WriteString(line + "\n"); err != nil {
-		opened.Close()
-		return err
-	}
-	return opened.Close()
+	return os.WriteFile(path, append(old, []byte(line+"\n")...), 0o644)
 }
 
-func (s *session) copiedLevels() []string {
-	levels := []string{s.level, levelOf(engineFile)}
-	for _, f := range s.files {
-		levels = append(levels, levelOf(f.name))
+func (box *toolbox) try(input Value) []result {
+	m := box.m
+	change := input.Text()
+	if m.change {
+		m.problem("a change does not try the change " + change)
+		return nil
 	}
-	for _, a := range s.stated("builds on", 2) {
-		levels = append(levels, a.args[1].plain())
-	}
-	seen := map[string]bool{}
-	var found []string
-	for _, level := range levels {
-		if level == "" || seen[level] || strings.ContainsAny(level, `/\`) || level == "." || level == ".." {
-			continue
-		}
-		seen[level] = true
-		found = append(found, level)
-	}
-	return found
-}
-
-func (s *session) try(k *knowledge, change term) ([]result, error) {
-	work, err := os.MkdirTemp("", "plain-change-")
+	dir, err := os.MkdirTemp("", "try-")
 	if err != nil {
-		return nil, err
+		m.problem("tools.go cannot make a folder to try " + change)
+		return nil
 	}
-	defer os.RemoveAll(work)
-	for _, level := range s.copiedLevels() {
-		if info, err := os.Stat(filepath.Join(s.root, level)); err != nil || !info.IsDir() {
-			continue
-		}
-		if err := copyFolder(filepath.Join(s.root, level), filepath.Join(work, level)); err != nil {
-			return nil, err
-		}
-		if content, err := os.ReadFile(filepath.Join(s.root, level+".db")); err == nil {
-			if err := os.WriteFile(filepath.Join(work, level+".db"), content, 0o644); err != nil {
-				return nil, err
-			}
-		}
+	defer os.RemoveAll(dir)
+	if err := copyTree(m.root, dir); err != nil {
+		m.problem("tools.go cannot copy the levels to try " + change + ": " + err.Error())
+		return nil
 	}
-	if err := os.MkdirAll(filepath.Join(work, s.level), 0o755); err != nil {
-		return nil, err
-	}
-	for _, a := range s.additions(k, change) {
-		if err := appendLine(work, a.file, a.line); err != nil {
-			return nil, err
+	for _, l := range box.adds[input] {
+		p, ok := within(dir, l[0])
+		if !ok {
+			m.problem(change + " adds a line to " + l[0] + ", which is not in the folder that holds the level folders")
+			return nil
+		}
+		if err := appendLine(p, l[1]); err != nil {
+			m.problem(change + " cannot add a line to " + l[0])
+			return nil
 		}
 	}
-	executable, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
-	command := exec.Command(executable, changeArgument)
-	command.Dir = filepath.Join(work, s.level)
-	var output bytes.Buffer
-	command.Stdout = &output
+	cmd := exec.Command(m.exe, "-change", filepath.Join(dir, filepath.Base(m.machineDir)))
+	cmd.Dir = filepath.Join(dir, m.level)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
 	code := 0
-	if err := command.Run(); err != nil {
+	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) {
-			return nil, err
+			m.problem("tools.go cannot run engine.go to try " + change)
+			return nil
 		}
 		code = exit.ExitCode()
 	}
-	found := []result{{"exit code", numberOf(int64(code))}}
-	for _, line := range strings.Split(output.String(), "\n") {
-		a, err := parseFact(line)
-		if err != nil || len(a.args) != 2 {
+	laws := map[string]bool{}
+	explained := map[string]bool{}
+	lines := bufio.NewScanner(&stdout)
+	lines.Buffer(make([]byte, 1<<20), 1<<26)
+	for lines.Scan() {
+		a, err := parseAtom(lines.Text())
+		if err != nil || len(a.Args) != 2 {
 			continue
 		}
-		switch a.name {
+		switch a.Pred {
 		case "breaks":
-			found = append(found, result{"broke", a.args[1]})
+			if !a.Args[1].IsBlank() {
+				laws[a.Args[1].Val.Text()] = true
+			}
 		case "holds because":
-			found = append(found, result{"explanation", textOf(a.line())})
+			explained[renderAtom(a, false)] = true
 		}
 	}
-	return found, nil
+	var out []result
+	for _, law := range sortedKeys(laws) {
+		out = append(out, result{"broke", Str(law)})
+	}
+	out = append(out, result{"exit code", Int(int64(code))})
+	for _, e := range sortedKeys(explained) {
+		out = append(out, result{"explanation", Str(e)})
+	}
+	return out
+}
+
+func sortedKeys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

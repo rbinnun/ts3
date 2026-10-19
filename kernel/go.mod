@@ -1,21 +1,15 @@
-module plainkernel
+module kernel
 
-go 1.24
+go 1.23.0
 
-require (
-	github.com/google/mangle v0.4.0
-	modernc.org/sqlite v1.38.2
-)
+require modernc.org/sqlite v1.38.2
 
 require (
-	bitbucket.org/creachadair/stringset v0.0.11 // indirect
-	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
 	golang.org/x/sys v0.34.0 // indirect
 	modernc.org/libc v1.66.3 // indirect

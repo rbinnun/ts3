@@ -1,11 +1,11 @@
 command: list the folder, calls, list, the folder
 
 [file], is, in the folder
-    if [command], calls, list, the folder
-    and [command], returned, file, [file]
+    if command: list the folder, returned, file, [file]
 
 [command], calls, find go comments, [file]
-    if [file], written in, go
+    if [file], is, in the folder
+    and [file], ends with, .go
     and [command], is the join of, "command: find the comments in ", [file]
 
 [file], has the comment, [comment]
@@ -17,89 +17,57 @@ command: list the folder, calls, list, the folder
     and not this run is a change
     and [command], is the join of, "command: try ", [change]
 
-list, is, in the catalog
-find go comments, is, in the catalog
-try, is, in the catalog
-list, returns, file
-find go comments, returns, comment
-try, returns, broke
-try, returns, exit code
-try, returns, explanation
-
 [command], is, named as a command
     if [command], calls, [any tool], [any input]
     and [command], starts with, "command: "
 
-[file], written in, [language]
-    if [file], is, in the folder
-    and [ending], means, [language]
-    and [file], ends with, [ending]
-
-[file], is, known
-    if [file], written in, [any language]
-
-[language], is, read as knowledge
-    if [language], is loaded as, [any way]
-
-[file], is, part of the machine
-    if [file], written in, [language]
-    and not [language], is, read as knowledge
+list, is, in the catalog
+list, returns, file
+find go comments, is, in the catalog
+find go comments, returns, comment
+try, is, in the catalog
+try, returns, broke
+try, returns, exit code
+try, returns, explanation
 
 [file], is, a used file
-    if kernel/engine.go, loads, [file]
+    if [any go file], loads, [file]
 [file], is, a used file
     if [any level], is tested with, [file]
 [file], is, a used file
-    if [file], is, part of the machine
+    if [file], creates fact, [any fact pattern]
+kernel/go.mod, is, a used file
+kernel/go.sum, is, a used file
+kernel/runme.sh, is, a used file
+
+[file], is, known
+    if [file], is, in the folder
+    and [ending], means, [any language]
+    and [file], ends with, [ending]
 
 [predicate], is, a predicate
-    if [rule], defines, [predicate]
-    and [rule], is, in the knowledge
-
+    if [any rule], defines, [predicate]
 [predicate], is, a used predicate
     if [any rule], refers to, [predicate]
 [predicate], is, a used predicate
     if the knowledge, shows, [fact pattern]
     and [fact pattern], names, [predicate]
-[predicate], is, a used predicate
-    if [any go file], reads, [fact pattern]
-    and [fact pattern], names, [predicate]
 
-[blank], is, well named
-    if [any fact pattern], has the slot, [blank]
-[blank], is, well named
-    if [blank], is, a slot name
-[blank], is, well named
+ending, is, a slot name
+language, is, a slot name
+code, is, a slot name
+
+[slot], is, a slot
     if [any fact pattern], has the slot, [slot]
+[slot], is, a slot
+    if [slot], is, a slot name
+[blank], is, well named
+    if [blank], is, a slot
+[blank], is, well named
+    if [any rule], has the blank, [blank]
+    and [slot], is, a slot
     and [blank], is the join of, "any ", [slot]
 [blank], is, well named
-    if [any fact pattern], has the slot, [slot]
+    if [any rule], has the blank, [blank]
+    and [slot], is, a slot
     and [blank], is the join of, "other ", [slot]
-
-kernel/engine.go, reads, [go file] loads [file]
-kernel/engine.go, reads, [level] builds on [other level]
-kernel/engine.go, reads, [level] is tested with [file]
-kernel/engine.go, reads, [ending] means [language]
-kernel/engine.go, reads, [language] is loaded as [way]
-kernel/engine.go, reads, [fact pattern] is private to its level
-kernel/engine.go, reads, [text] means in mangle [mangle]
-kernel/engine.go, reads, [thing] is computed as [description]
-kernel/engine.go, reads, [go file] prints [knowledge]
-kernel/engine.go, reads, [go file] prints in [language]
-kernel/engine.go, reads, [go file] prints to [output]
-kernel/engine.go, reads, [knowledge] shows [fact pattern]
-kernel/engine.go, reads, [knowledge] gives reasons for [fact pattern]
-kernel/engine.go, reads, [level] expects [fact]
-kernel/engine.go, reads, [level] rules out [fact]
-kernel/engine.go, reads, [folder] conforms [answer]
-kernel/engine.go, reads, [answer] exits with [code]
-kernel/engine.go, reads, [knowledge] is published to [store]
-kernel/engine.go, reads, [knowledge] is published only when [answer]
-kernel/engine.go, reads, [store] is the sqlite file [file]
-kernel/engine.go, reads, [store] has the table [table]
-kernel/engine.go, reads, [table] has a row for [rows]
-kernel/engine.go, reads, [table] has the column [number] [column] [content]
-kernel/engine.go, reads, [certificate] holds [part]
-kernel/engine.go, reads, [file] is part of the machine
-kernel/tools.go, reads, [command] calls [tool] [input]
-kernel/tools.go, reads, [change] adds line [file] [line]

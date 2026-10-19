@@ -1,11 +1,6 @@
 #!/bin/sh
-kernel=$(cd "$(dirname "$0")" && pwd)
-work=$(mktemp -d)
-if ! (cd "$kernel" && go build -o "$work/engine" .); then
-	rm -rf "$work"
-	exit 2
-fi
-"$work/engine" "$@"
-status=$?
-rm -rf "$work"
-exit $status
+machine=$(cd "$(dirname "$0")" && pwd) || exit 2
+work=$(mktemp -d) || exit 2
+trap 'rm -rf "$work"' EXIT
+(cd "$machine" && go build -o "$work/engine" .) >&2 || exit 2
+"$work/engine" "$machine"
