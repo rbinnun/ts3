@@ -25,6 +25,8 @@ kernel/engine.go, creates fact, [fact] is present
 kernel/agent.plain, creates fact, [command] calls [tool] [input]
 kernel/agent.plain, creates fact, [file] is in the folder
 kernel/agent.plain, creates fact, [file] has the comment [comment]
+kernel/agent.plain, creates fact, [file] has the function [function]
+kernel/agent.plain, creates fact, [function] implements [fact pattern]
 
 [command], breaks, Every command calls a tool in the catalog
     if [command], calls, [tool], [any input]
@@ -209,6 +211,34 @@ a change that expects an unknown law, must break, Every change comes out as stat
 
 a predicate nobody uses, adds line, kernel/human.plain, "a, is, lonely"
 a predicate nobody uses, must break, Every predicate is used
+
+[predicate], is, a used predicate
+    if [any rule], refers to, [predicate]
+[predicate], is, a used predicate
+    if the knowledge, shows, [fact pattern]
+    and [fact pattern], names, [predicate]
+[predicate], is, a used predicate
+    if [any function], implements, [fact pattern]
+    and [fact pattern], names, [predicate]
+
+[function], breaks, Every function has a reason
+    if [any file], has the function, [function]
+    and not [function], implements, [any fact pattern]
+
+a function with no reason, adds line, kernel/tools.go, func stray() {}
+a function with no reason, must break, Every function has a reason
+a function with no reason, must answer, false
+
+[fact pattern], breaks, Every fact a go file creates has a function there
+    if [go file], creates fact, [fact pattern]
+    and [go file], ends with, .go
+    and not [go file], has a function for, [fact pattern]
+[file], has a function for, [fact pattern]
+    if [file], has the function, [function]
+    and [function], implements, [fact pattern]
+
+a fact no function creates, adds line, kernel/human.plain, "kernel/tools.go, creates fact, [thing] is a ghost"
+a fact no function creates, must break, Every fact a go file creates has a function there
 
 [blank], breaks, Every blank is named after a slot
     if [any rule], has the blank, [blank]
