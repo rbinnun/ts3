@@ -38,6 +38,17 @@ No golden event is lost, is, a serious warning
     and not [event], is matched in, [reconciliation]
 No checked event is invented, is, a serious warning
 
+partner, is, a slot name
+[event], breaks, No event has two partners
+    if [event], matches, [partner]
+    and [event], matches, [other partner]
+    and [partner], differs from, [other partner]
+[event], breaks, No event has two partners
+    if [partner], matches, [event]
+    and [other partner], matches, [event]
+    and [partner], differs from, [other partner]
+No event has two partners, is, a warning
+
 reconciliation/sent.csv, is, a source
 reconciliation/sent.csv, gives the time in, at
 reconciliation/sent.csv, gives the entity in, stream
@@ -85,3 +96,6 @@ a delivery nobody sent, must explain, '"reconciliation/received.csv:6, breaks, N
 
 a delivery of another size, adds line, reconciliation/received.csv, 101,x1,11
 a delivery of another size, must break, No checked event is invented
+
+a delivery received twice, adds line, reconciliation/received.csv, 102,x1,10
+a delivery received twice, must break, No event has two partners
