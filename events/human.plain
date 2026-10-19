@@ -19,6 +19,7 @@ events, expects, "worker ann, is still open since, 700"
 events, expects, "swipe s3, comes after, swipe s1"
 events, expects, "beeper 7 #2, comes after, beeper 7 #1"
 events, expects, "swipe s1, falls inside an interval of, events/shifts.csv"
+events, expects, "swipe s1, falls inside, worker ann"
 
 events, lets every level state, [source] is a source
 events, lets every level state, [source] gives the time in [column]
