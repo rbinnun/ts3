@@ -1,0 +1,157 @@
+time, is, a slot name
+middle row, is, a slot name
+
+[row], happened at, [time]
+    if [row], is a row of, [source]
+    and [source], is, a source
+    and [source], gives the time in, [column]
+    and [row], has the cell, [column], [time]
+
+[row], is, an event
+    if [row], happened at, [any time]
+
+[row], is about, [entity]
+    if [row], is, an event
+    and [row], is a row of, [source]
+    and [source], gives the entity in, [column]
+    and [row], has the cell, [column], [value]
+    and [source], calls its entities, [prefix]
+    and [entity], is the join of, [prefix], [value]
+
+[row], opens, [entity]
+    if [row], is about, [entity]
+    and [row], is a row of, [source]
+    and [source], gives the kind in, [column]
+    and [row], has the cell, [column], [kind]
+    and [source], opens with, [kind]
+
+[row], closes, [entity]
+    if [row], is about, [entity]
+    and [row], is a row of, [source]
+    and [source], gives the kind in, [column]
+    and [row], has the cell, [column], [kind]
+    and [source], closes with, [kind]
+
+[row], marks, [entity]
+    if [row], opens, [entity]
+[row], marks, [entity]
+    if [row], closes, [entity]
+
+[row], follows, [other row]
+    if [row], marks, [entity]
+    and [other row], marks, [entity]
+    and [row], is a row of, [source]
+    and [other row], is a row of, [source]
+    and [row], happened at, [time]
+    and [other row], happened at, [other time]
+    and [other time], is before, [time]
+[row], follows, [other row]
+    if [row], marks, [entity]
+    and [other row], marks, [entity]
+    and [row], is a row of, [source]
+    and [other row], is a row of, [source]
+    and [row], happened at, [time]
+    and [other row], happened at, [time]
+    and [row], is on line, [number]
+    and [other row], is on line, [other number]
+    and [other number], is before, [number]
+
+[row], skips, [other row]
+    if [row], follows, [middle row]
+    and [middle row], follows, [other row]
+
+[row], directly follows, [other row]
+    if [row], follows, [other row]
+    and not [row], skips, [other row]
+
+[row], is, after an open
+    if [row], directly follows, [other row]
+    and [other row], opens, [any entity]
+
+[row], is, an interval start
+    if [row], opens, [any entity]
+    and not [row], is, after an open
+
+[row], is, an interval end
+    if [row], closes, [any entity]
+    and [row], is, after an open
+
+[row], is closed before, [other row]
+    if [other row], follows, [middle row]
+    and [middle row], follows, [row]
+    and [middle row], closes, [any entity]
+
+[row], is closed by, [other row]
+    if [row], is, an interval start
+    and [other row], follows, [row]
+    and [other row], closes, [any entity]
+    and not [row], is closed before, [other row]
+
+[row], is closed at, [end]
+    if [row], is closed by, [other row]
+    and [other row], happened at, [end]
+
+[row], is, never closed
+    if [row], is, an interval start
+    and not [row], is closed by, [any row]
+
+[entity], is open between, [start], [end]
+    if [row], opens, [entity]
+    and [row], happened at, [start]
+    and [row], is closed at, [end]
+
+[entity], is still open since, [start]
+    if [row], opens, [entity]
+    and [row], is, never closed
+    and [row], happened at, [start]
+
+[row], has the same interval key as, [other row]
+    if [row], is a row of, [source]
+    and [source], must fall inside the intervals of, [other source]
+    and [other row], is a row of, [other source]
+    and [source], gives the interval key in, [column]
+    and [other source], gives the interval key in, [other column]
+    and [row], has the cell, [column], [value]
+    and [other row], has the cell, [other column], [value]
+
+[row], falls inside the interval opened by, [other row]
+    if [row], has the same interval key as, [other row]
+    and [row], happened at, [time]
+    and [other row], happened at, [start]
+    and [other row], is closed at, [end]
+    and [start], is at most, [time]
+    and [time], is at most, [end]
+[row], falls inside the interval opened by, [other row]
+    if [row], has the same interval key as, [other row]
+    and [row], happened at, [time]
+    and [other row], happened at, [start]
+    and [other row], is, never closed
+    and [start], is at most, [time]
+
+[row], falls inside, [entity]
+    if [row], falls inside the interval opened by, [other row]
+    and [other row], opens, [entity]
+
+[row], falls inside an interval of, [other source]
+    if [row], falls inside the interval opened by, [other row]
+    and [other row], is a row of, [other source]
+
+[row], is a duplicate of, [other row]
+    if [row], is a row of, [source]
+    and [other row], is a row of, [source]
+    and [source], gives the duplicate key in, [column]
+    and [row], has the cell, [column], [value]
+    and [other row], has the cell, [column], [value]
+    and [row], is on line, [number]
+    and [other row], is on line, [other number]
+    and [other number], is before, [number]
+
+[row], comes after, [other row]
+    if [row], is a row of, [source]
+    and [other row], is a row of, [source]
+    and [source], gives the sequence in, [column]
+    and [row], has the cell, [column], [number]
+    and [other row], has the cell, [column], [other number]
+    and [number], is one more than, [other number]
+    and [row], is about, [entity]
+    and [other row], is about, [entity]
