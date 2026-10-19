@@ -1,5 +1,10 @@
 cd "$(dirname "$0")" || exit 2
-place=$(mktemp -d) || exit 2
-trap 'rm -rf "$place"' EXIT
-go build -buildvcs=false -o "$place/engine" . || exit 2
-"$place/engine" "$@"
+dir=$(mktemp -d) || exit 2
+if ! go build -o "$dir/engine" .; then
+	rm -rf "$dir"
+	exit 2
+fi
+"$dir/engine" "$@"
+code=$?
+rm -rf "$dir"
+exit "$code"

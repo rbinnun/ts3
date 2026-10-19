@@ -5,8 +5,8 @@ command: list the folder, calls, list, the folder
     and [command], returned, file, [file]
 
 [command], calls, [tool], [file]
-    if [tool], finds comments in, [language]
-    and [file], written in, [language]
+    if [file], written in, [language]
+    and [tool], finds comments in, [language]
     and [command], is the join of, "command: find the comments in ", [file]
 
 [file], has the comment, [comment]
