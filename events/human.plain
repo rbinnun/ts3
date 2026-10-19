@@ -3,16 +3,22 @@ kernel/engine.go, loads, events/agent.plain
 events, builds on, kernel
 events, is tested with, events/shifts.csv
 events, is tested with, events/swipes.csv
+events, is tested with, events/beeps.csv
 
-events, expects, "events/shifts.csv:2, is, an event"
-events, expects, "events/shifts.csv:2, happened at, 100"
-events, expects, "events/shifts.csv:2, is about, worker ann"
+events, expects, "events/shifts.csv:2, is the event, events/shifts.csv:2"
+events, expects, "events/swipes.csv:2, is the event, swipe s1"
+events, expects, "events/beeps.csv:2, is the event, beeper 7 #1"
+events, expects, "swipe s1, is an event of, events/swipes.csv"
+events, expects, "swipe s1, is seen on, events/swipes.csv:2"
+events, expects, "swipe s1, happened at, 110"
+events, expects, "swipe s1, is about, badge 7"
 events, expects, "events/shifts.csv:2, opens, worker ann"
 events, expects, "events/shifts.csv:4, closes, worker ann"
 events, expects, "worker ann, is open between, 100, 500"
 events, expects, "worker ann, is still open since, 700"
-events, expects, "events/swipes.csv:4, comes after, events/swipes.csv:2"
-events, expects, "events/swipes.csv:2, falls inside an interval of, events/shifts.csv"
+events, expects, "swipe s3, comes after, swipe s1"
+events, expects, "beeper 7 #2, comes after, beeper 7 #1"
+events, expects, "swipe s1, falls inside an interval of, events/shifts.csv"
 
 events, lets every level state, [source] is a source
 events, lets every level state, [source] gives the time in [column]
@@ -21,39 +27,40 @@ events, lets every level state, [source] calls its entities [prefix]
 events, lets every level state, [source] gives the kind in [column]
 events, lets every level state, [source] opens with [kind]
 events, lets every level state, [source] closes with [kind]
-events, lets every level state, [source] gives the duplicate key in [column]
+events, lets every level state, [source] names its events by [column]
+events, lets every level state, [source] calls its events [prefix]
 events, lets every level state, [source] gives the sequence in [column]
 events, lets every level state, [source] gives the interval key in [column]
 events, lets every level state, [source] must fall inside the intervals of [other source]
 
-[row], breaks, Every open starts an interval
-    if [row], opens, [any entity]
-    and not [row], is, an interval start
-[row], breaks, Every close ends an interval
-    if [row], closes, [any entity]
-    and not [row], is, an interval end
+[event], breaks, Every open starts an interval
+    if [event], opens, [any entity]
+    and not [event], is, an interval start
+[event], breaks, Every close ends an interval
+    if [event], closes, [any entity]
+    and not [event], is, an interval end
 Every open starts an interval, is, a warning
 Every close ends an interval, is, a warning
 
 the knowledge, shows, [entity] is open between [start] [end]
 the knowledge, shows, [entity] is still open since [start]
 
-[row], breaks, No event is duplicated
-    if [row], is a duplicate of, [any row]
-No event is duplicated, is, a warning
+[event], breaks, No event is seen twice
+    if [event], is seen on, [row]
+    and [event], is seen on, [other row]
+    and [row], differs from, [other row]
+No event is seen twice, is, a warning
 
-the knowledge, shows, [row] is a duplicate of [other row]
+the knowledge, shows, [row] is the event [event]
+the knowledge, shows, [event] comes after [other event]
 
-the knowledge, shows, [row] comes after [other row]
-
-[row], breaks, Every event falls inside an open interval
+[event], breaks, Every event falls inside an open interval
     if [source], must fall inside the intervals of, [other source]
-    and [row], is a row of, [source]
-    and [row], is, an event
-    and not [row], falls inside an interval of, [other source]
+    and [event], is an event of, [source]
+    and not [event], falls inside an interval of, [other source]
 Every event falls inside an open interval, is, a serious warning
 
-the knowledge, shows, [row] falls inside [entity]
+the knowledge, shows, [event] falls inside [entity]
 
 events/shifts.csv, is, a source
 events/shifts.csv, gives the time in, at
@@ -69,9 +76,16 @@ events/swipes.csv, gives the time in, at
 events/swipes.csv, gives the entity in, badge
 events/swipes.csv, calls its entities, "badge "
 events/swipes.csv, gives the sequence in, seq
-events/swipes.csv, gives the duplicate key in, swipe
+events/swipes.csv, names its events by, swipe
+events/swipes.csv, calls its events, "swipe "
 events/swipes.csv, gives the interval key in, desk
 events/swipes.csv, must fall inside the intervals of, events/shifts.csv
+
+events/beeps.csv, is, a source
+events/beeps.csv, gives the time in, at
+events/beeps.csv, gives the entity in, badge
+events/beeps.csv, calls its entities, "beeper "
+events/beeps.csv, gives the sequence in, seq
 
 a shift opened twice, adds line, events/shifts.csv, 800,ann,in,4
 a shift opened twice, must break, Every open starts an interval
@@ -82,9 +96,13 @@ a shift closed without an open, must break, Every close ends an interval
 a shift closed without an open, must explain, '"events/shifts.csv:7, breaks, Every close ends an interval", holds because, "not events/shifts.csv:7, is, an interval end"'
 
 a swipe counted twice, adds line, events/swipes.csv, 111,1,7,1,s1
-a swipe counted twice, must break, No event is duplicated
-a swipe counted twice, must explain, '"events/swipes.csv:6, breaks, No event is duplicated", holds because, "events/swipes.csv:6, is a duplicate of, events/swipes.csv:2"'
+a swipe counted twice, must break, No event is seen twice
+a swipe counted twice, must explain, '"swipe s1, breaks, No event is seen twice", holds because, "swipe s1, is seen on, events/swipes.csv:6"'
+
+a beep counted twice, adds line, events/beeps.csv, 131,7,1
+a beep counted twice, must break, No event is seen twice
+a beep counted twice, must answer, true
 
 a swipe outside every shift, adds line, events/swipes.csv, 650,2,8,2,s5
 a swipe outside every shift, must break, Every event falls inside an open interval
-a swipe outside every shift, must explain, '"events/swipes.csv:6, breaks, Every event falls inside an open interval", holds because, "not events/swipes.csv:6, falls inside an interval of, events/shifts.csv"'
+a swipe outside every shift, must explain, '"swipe s5, breaks, Every event falls inside an open interval", holds because, "not swipe s5, falls inside an interval of, events/shifts.csv"'

@@ -5,17 +5,22 @@ kernel/engine.go, loads, domain/engine_messages.csv
 kernel/engine.go, loads, domain/wire_messages.csv
 domain, builds on, reconciliation
 
-domain, expects, "domain/engine_messages.csv:2, matches, domain/wire_messages.csv:2"
-domain, expects, "domain/wire_messages.csv:7, falls inside an interval of, domain/engine_connections.csv"
-domain, rules out, "domain/engine_messages.csv:10, is lost in, messages"
+domain, expects, "connection 47 #1, matches, wire packet 1"
+domain, expects, "wire packet 6, falls inside an interval of, domain/engine_connections.csv"
+domain, rules out, "connection 49 #1, is lost in, messages"
 
 domain/engine_connections.csv, is, a source
 
 domain/engine_messages.csv, is, a source
+domain/engine_messages.csv, gives the entity in, connection
+domain/engine_messages.csv, calls its entities, "connection "
+domain/engine_messages.csv, gives the sequence in, seq
 domain/engine_messages.csv, gives the key part, order, order
 domain/engine_messages.csv, gives the key part, kind, kind
 
 domain/wire_messages.csv, is, a source
+domain/wire_messages.csv, names its events by, packet
+domain/wire_messages.csv, calls its events, "wire packet "
 domain/wire_messages.csv, gives the key part, order, order
 domain/wire_messages.csv, gives the key part, kind, kind
 domain/wire_messages.csv, must fall inside the intervals of, domain/engine_connections.csv
@@ -35,28 +40,28 @@ a close without an open, must explain, '"domain/engine_connections.csv:8, breaks
 
 a wire message after its session closed, adds line, domain/wire_messages.csv, 2550,40048,201,new,9
 a wire message after its session closed, must break, Every event falls inside an open interval
-a wire message after its session closed, must explain, '"domain/wire_messages.csv:10, breaks, Every event falls inside an open interval", holds because, "not domain/wire_messages.csv:10, falls inside an interval of, domain/engine_connections.csv"'
+a wire message after its session closed, must explain, '"wire packet 9, breaks, Every event falls inside an open interval", holds because, "not wire packet 9, falls inside an interval of, domain/engine_connections.csv"'
 
 a message the wire dropped, adds line, domain/engine_messages.csv, 3100,47,5,104,new
 a message the wire dropped, adds line, domain/engine_messages.csv, 3200,47,6,105,new
 a message the wire dropped, adds line, domain/wire_messages.csv, 3201,40047,105,new,9
 a message the wire dropped, must break, No golden event is dropped
 a message the wire dropped, must answer, true
-a message the wire dropped, must explain, '"domain/engine_messages.csv:11, breaks, No golden event is dropped", holds because, "domain/engine_messages.csv:11, is dropped in, messages"'
+a message the wire dropped, must explain, '"connection 47 #5, breaks, No golden event is dropped", holds because, "connection 47 #5, is dropped in, messages"'
 
 a message the wire never saw, adds line, domain/engine_messages.csv, 3100,47,5,104,new
 a message the wire never saw, must break, No golden event is lost
-a message the wire never saw, must explain, '"domain/engine_messages.csv:11, breaks, No golden event is lost", holds because, "not domain/engine_messages.csv:11, is dropped in, messages"'
+a message the wire never saw, must explain, '"connection 47 #5, breaks, No golden event is lost", holds because, "not connection 47 #5, is dropped in, messages"'
 
 a wire message nobody logged, adds line, domain/wire_messages.csv, 3500,40047,999,new,9
 a wire message nobody logged, must break, No checked event is invented
 a wire message nobody logged, must answer, true
-a wire message nobody logged, must explain, '"domain/wire_messages.csv:10, breaks, No checked event is invented", holds because, "not domain/wire_messages.csv:10, is matched in, messages"'
+a wire message nobody logged, must explain, '"wire packet 9, breaks, No checked event is invented", holds because, "not wire packet 9, is matched in, messages"'
 
 a wire message of another kind, adds line, domain/wire_messages.csv, 1101,40047,101,replace,9
 a wire message of another kind, must break, No checked event is invented
 
 a duplicated wire message, adds line, domain/wire_messages.csv, 1101,40047,101,new,1
-a duplicated wire message, must break, No event is duplicated
+a duplicated wire message, must break, No event is seen twice
 a duplicated wire message, must answer, true
-a duplicated wire message, must explain, '"domain/wire_messages.csv:10, breaks, No event is duplicated", holds because, "domain/wire_messages.csv:10, is a duplicate of, domain/wire_messages.csv:2"'
+a duplicated wire message, must explain, '"wire packet 1, breaks, No event is seen twice", holds because, "wire packet 1, is seen on, domain/wire_messages.csv:10"'

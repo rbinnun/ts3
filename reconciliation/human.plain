@@ -4,11 +4,11 @@ reconciliation, builds on, events
 reconciliation, is tested with, reconciliation/sent.csv
 reconciliation, is tested with, reconciliation/received.csv
 
-reconciliation, expects, "reconciliation/sent.csv:2, matches, reconciliation/received.csv:2"
-reconciliation, expects, "reconciliation/sent.csv:5, matches, reconciliation/received.csv:5"
-reconciliation, expects, "reconciliation/sent.csv:2, is matched in, deliveries"
+reconciliation, expects, "stream a #1, matches, reconciliation/received.csv:2"
+reconciliation, expects, "stream b #1, matches, reconciliation/received.csv:5"
+reconciliation, expects, "stream a #1, is matched in, deliveries"
 reconciliation, expects, "reconciliation/received.csv:2, is matched in, deliveries"
-reconciliation, rules out, "reconciliation/sent.csv:6, is lost in, deliveries"
+reconciliation, rules out, "stream c #1, is lost in, deliveries"
 
 reconciliation, lets every level state, [reconciliation] is a reconciliation
 reconciliation, lets every level state, [reconciliation] has the golden view [source]
@@ -23,20 +23,19 @@ reconciliation, lets every level state, [source] gives the key part [part] [colu
     and [other source], has the key part, [part]
     and not [source], has the key part, [part]
 
-the knowledge, shows, [row] matches [other row]
+the knowledge, shows, [event] matches [other event]
 
-[row], breaks, No golden event is dropped
-    if [row], is dropped in, [reconciliation]
+[event], breaks, No golden event is dropped
+    if [event], is dropped in, [reconciliation]
 No golden event is dropped, is, a warning
-[row], breaks, No golden event is lost
-    if [row], is lost in, [reconciliation]
-    and not [row], is dropped in, [reconciliation]
+[event], breaks, No golden event is lost
+    if [event], is lost in, [reconciliation]
+    and not [event], is dropped in, [reconciliation]
 No golden event is lost, is, a serious warning
-[row], breaks, No checked event is invented
+[event], breaks, No checked event is invented
     if [reconciliation], checks, [source]
-    and [row], is a row of, [source]
-    and [row], is, an event
-    and not [row], is matched in, [reconciliation]
+    and [event], is an event of, [source]
+    and not [event], is matched in, [reconciliation]
 No checked event is invented, is, a serious warning
 
 reconciliation/sent.csv, is, a source
@@ -67,17 +66,17 @@ a delivery dropped, adds line, reconciliation/sent.csv, 360,a,5,x5,36
 a delivery dropped, adds line, reconciliation/received.csv, 361,x5,36
 a delivery dropped, must break, No golden event is dropped
 a delivery dropped, must answer, true
-a delivery dropped, must explain, '"reconciliation/sent.csv:7, breaks, No golden event is dropped", holds because, "reconciliation/sent.csv:7, is dropped in, deliveries"'
+a delivery dropped, must explain, '"stream a #4, breaks, No golden event is dropped", holds because, "stream a #4, is dropped in, deliveries"'
 
 a delivery never received, adds line, reconciliation/sent.csv, 350,a,4,x4,35
 a delivery never received, must break, No golden event is lost
-a delivery never received, must explain, '"reconciliation/sent.csv:7, breaks, No golden event is lost", holds because, "not reconciliation/sent.csv:7, is dropped in, deliveries"'
+a delivery never received, must explain, '"stream a #4, breaks, No golden event is lost", holds because, "not stream a #4, is dropped in, deliveries"'
 
 a first delivery never received, adds line, reconciliation/sent.csv, 120,d,1,w1,11
 a first delivery never received, adds line, reconciliation/sent.csv, 130,d,2,w2,12
 a first delivery never received, adds line, reconciliation/received.csv, 131,w2,12
 a first delivery never received, must break, No golden event is lost
-a first delivery never received, must explain, '"reconciliation/sent.csv:7, breaks, No golden event is lost", holds because, "not reconciliation/sent.csv:7, is dropped in, deliveries"'
+a first delivery never received, must explain, '"stream d #1, breaks, No golden event is lost", holds because, "not stream d #1, is dropped in, deliveries"'
 
 a delivery nobody sent, adds line, reconciliation/received.csv, 450,q9,99
 a delivery nobody sent, must break, No checked event is invented
