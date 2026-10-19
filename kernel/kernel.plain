@@ -425,6 +425,7 @@ kernel, lets every level state, [level] is tested with [file]
 kernel, lets every level state, [slot] is a slot name
 kernel, lets every level state, [law] is a warning
 kernel, lets every level state, [law] is a serious warning
+kernel, lets every level state, [thing] breaks [law]
 kernel, lets every level state, [knowledge] shows [fact pattern]
 kernel, lets every level state, [change] adds line [file] [line]
 kernel, lets every level state, [change] must break [law]
