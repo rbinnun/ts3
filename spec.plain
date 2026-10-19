@@ -1,6 +1,7 @@
 engine.go, loads, spec.plain
 engine.go, loads, workflow.plain
 engine.go, loads, engine_connections.csv
+engine.go, loads, wire_flows.csv
 engine.go, is, part of the machine
 tools.go, is, part of the machine
 runme.sh, is, part of the machine
@@ -142,6 +143,8 @@ a law is broken, means in mangle, a_law_is_broken().
 "[file], differs from, [other file]", means in mangle, File != OtherFile
 "[time], is before, [other time]", means in mangle, ":lt(Time, OtherTime)"
 "[difference], is the difference of, [later], [earlier]", means in mangle, "Difference = fn:minus(Later, Earlier)"
+"[difference], is at most, [tolerance]", means in mangle, ":le(Difference, Tolerance)"
+"[entity], is the join of, [prefix], [value]", means in mangle, "Entity = fn:string:concat(Prefix, Value)"
 '[command], is the join of, "command: find the comments in ", [file]', means in mangle, 'Command = fn:string:concat("command: find the comments in ", File)'
 
 [rule], breaks, Every rule reads back as written
@@ -257,6 +260,11 @@ a predicate nobody uses, must break, Every predicate is used
     if [any fact pattern], has the slot, [slot]
 ending, is, a slot name
 time, is, a slot name
+prefix, is, a slot name
+key, is, a slot name
+fusion, is, a slot name
+tolerance, is, a slot name
+difference, is, a slot name
 [blank], is, well named
     if [blank], is, a slot name
 [blank], is, well named
@@ -334,12 +342,16 @@ engine_connections.csv, gives the entity in, connection
 engine_connections.csv, gives the kind in, what
 engine_connections.csv, opens with, connect
 engine_connections.csv, closes with, disconnect
+engine_connections.csv, calls its entities, "engine connection "
+engine_connections.csv, gives the key in, port
 
 [row], is about, [entity]
     if [row], is a row of, [source]
     and [source], is, a source
     and [source], gives the entity in, [column]
-    and [row], has the cell, [column], [entity]
+    and [row], has the cell, [column], [value]
+    and [source], calls its entities, [prefix]
+    and [entity], is the join of, [prefix], [value]
 [row], is of the kind, [kind]
     if [row], is a row of, [source]
     and [source], is, a source
@@ -408,12 +420,74 @@ engine_connections.csv, closes with, disconnect
     if [row], closes, [any entity]
     and not [row], is, an interval end
 
-an open twice, adds line, engine_connections.csv, 7000,49,connect
+an open twice, adds line, engine_connections.csv, 7000,49,connect,40049
 an open twice, must break, Every open starts an interval
 
-a close without an open, adds line, engine_connections.csv, 9000,99,disconnect
+a close without an open, adds line, engine_connections.csv, 9000,99,disconnect,40099
 a close without an open, must break, Every close ends an interval
 a close without an open, must explain, '"engine_connections.csv:8, breaks, Every close ends an interval", holds because, "not engine_connections.csv:8, is, an interval end"'
 
 the knowledge view, shows, [entity] is open between [start] [end]
 the knowledge view, shows, [entity] is still open since [start]
+
+wire_flows.csv, is, a source
+wire_flows.csv, gives the time in, seen
+wire_flows.csv, gives the entity in, src_port
+wire_flows.csv, gives the kind in, flag
+wire_flows.csv, opens with, SYN
+wire_flows.csv, closes with, FIN
+wire_flows.csv, calls its entities, "wire flow "
+wire_flows.csv, gives the key in, src_port
+
+connections, is, a fusion
+connections, fuses, engine_connections.csv
+connections, fuses, wire_flows.csv
+connections, allows a time difference of, 5
+
+[row], has the key, [key]
+    if [row], is a row of, [source]
+    and [source], gives the key in, [column]
+    and [row], has the cell, [column], [key]
+[row], is close to, [other row]
+    if [row], is a row of, [source]
+    and [other row], is a row of, [other source]
+    and [fusion], fuses, [source]
+    and [fusion], fuses, [other source]
+    and [source], differs from, [other source]
+    and [row], has the key, [key]
+    and [other row], has the key, [key]
+    and [row], happened at, [time]
+    and [other row], happened at, [other time]
+    and [fusion], allows a time difference of, [tolerance]
+    and [difference], is the difference of, [time], [other time]
+    and [difference], is at most, [tolerance]
+    and [other difference], is the difference of, [other time], [time]
+    and [other difference], is at most, [tolerance]
+[row], is corroborated by, [other row]
+    if [row], is close to, [other row]
+    and [row], opens, [entity]
+    and [other row], opens, [other entity]
+[row], is corroborated by, [other row]
+    if [row], is close to, [other row]
+    and [row], closes, [entity]
+    and [other row], closes, [other entity]
+[row], is corroborated in, [other source]
+    if [row], is corroborated by, [other row]
+    and [other row], is a row of, [other source]
+
+[row], breaks, Every event is corroborated by every view of its fusion
+    if [row], is a row of, [source]
+    and [fusion], fuses, [source]
+    and [fusion], fuses, [other source]
+    and [source], differs from, [other source]
+    and not [row], is corroborated in, [other source]
+
+a wire flow nobody logged, adds line, wire_flows.csv, 8001,40999,SYN
+a wire flow nobody logged, must break, Every event is corroborated by every view of its fusion
+a wire flow nobody logged, must explain, '"wire_flows.csv:8, breaks, Every event is corroborated by every view of its fusion", holds because, "not wire_flows.csv:8, is corroborated in, engine_connections.csv"'
+
+a disconnect the wire saw too late, adds line, engine_connections.csv, 8000,49,disconnect,40049
+a disconnect the wire saw too late, adds line, wire_flows.csv, 8100,40049,FIN
+a disconnect the wire saw too late, must break, Every event is corroborated by every view of its fusion
+
+the knowledge view, shows, [row] is corroborated by [other row]
