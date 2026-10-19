@@ -1,12 +1,14 @@
 engine.go, loads, spec.plain
 engine.go, loads, workflow.plain
+engine.go, loads, engine_connections.csv
 engine.go, is, part of the machine
 tools.go, is, part of the machine
 runme.sh, is, part of the machine
 go.mod, is, part of the machine
 go.sum, is, part of the machine
 
-engine.go, executes instruction, [go file] loads [plain file]
+engine.go, executes instruction, [go file] loads [file]
+engine.go, executes instruction, [language] is loaded as [kind]
 engine.go, executes instruction, [line] means in mangle [mangle]
 engine.go, executes instruction, [command] calls [tool] [input]
 engine.go, executes instruction, [answer] exits with [code]
@@ -43,6 +45,8 @@ engine.go, creates fact, [rule] has the blank [blank]
 engine.go, creates fact, [fact pattern] has the slot [slot]
 engine.go, creates fact, [fact] holds because [reason]
 engine.go, creates fact, [rule] has the id [id]
+engine.go, creates fact, [row] is a row of [source]
+engine.go, creates fact, [row] has the cell [column] [value]
 workflow.plain, creates fact, [command] calls [tool] [input]
 workflow.plain, creates fact, [file] is in the folder
 workflow.plain, creates fact, [file] has the comment [comment]
@@ -98,6 +102,7 @@ a command with two tools, must break, Every tool returns only what the catalog l
 
 a file nobody uses, adds line, notes.plain, "a, is, a note"
 a file nobody uses, must break, Every file is used
+a file nobody uses, must explain, '"notes.plain, breaks, Every file is used", holds because, "not notes.plain, is, a used file"'
 
 [file], breaks, Every file engine.go loads is in the folder
     if engine.go, loads, [file]
@@ -135,6 +140,8 @@ a law is broken, means in mangle, a_law_is_broken().
 "[file], ends with, [ending]", means in mangle, ":string:ends_with(File, Ending)"
 "[command], starts with, [prefix]", means in mangle, ":string:starts_with(Command, Prefix)"
 "[file], differs from, [other file]", means in mangle, File != OtherFile
+"[time], is before, [other time]", means in mangle, ":lt(Time, OtherTime)"
+"[difference], is the difference of, [later], [earlier]", means in mangle, "Difference = fn:minus(Later, Earlier)"
 '[command], is the join of, "command: find the comments in ", [file]', means in mangle, 'Command = fn:string:concat("command: find the comments in ", File)'
 
 [rule], breaks, Every rule reads back as written
@@ -159,6 +166,7 @@ a rule with a wrong id, must break, Every rule has the id it must have
 go.mod, means, go module
 go.sum, means, go checksums
 .sh, means, sh
+.csv, means, rows
 
 [file], written in, [language]
     if [file], is, in the folder
@@ -248,6 +256,7 @@ a predicate nobody uses, must break, Every predicate is used
 [slot], is, a slot name
     if [any fact pattern], has the slot, [slot]
 ending, is, a slot name
+time, is, a slot name
 [blank], is, well named
     if [blank], is, a slot name
 [blank], is, well named
@@ -312,3 +321,99 @@ the store, keeps, every reason for every derived fact
 the store, keeps, the certificate
 the certificate, holds, the hash of every file engine.go loads
 the certificate, holds, the answer
+the store, keeps, every not condition a derived fact rests on
+
+plain language, is loaded as, rules and facts
+rows, is loaded as, a row per line with a cell per column
+a row name, is computed as, the file name and a colon and the line number
+a cell value, is computed as, the cell text read as a plain value
+
+engine_connections.csv, is, a source
+engine_connections.csv, gives the time in, at
+engine_connections.csv, gives the entity in, connection
+engine_connections.csv, gives the kind in, what
+engine_connections.csv, opens with, connect
+engine_connections.csv, closes with, disconnect
+
+[row], is about, [entity]
+    if [row], is a row of, [source]
+    and [source], is, a source
+    and [source], gives the entity in, [column]
+    and [row], has the cell, [column], [entity]
+[row], is of the kind, [kind]
+    if [row], is a row of, [source]
+    and [source], is, a source
+    and [source], gives the kind in, [column]
+    and [row], has the cell, [column], [kind]
+[row], happened at, [time]
+    if [row], is a row of, [source]
+    and [source], is, a source
+    and [source], gives the time in, [column]
+    and [row], has the cell, [column], [time]
+[row], opens, [entity]
+    if [row], is about, [entity]
+    and [row], is of the kind, [kind]
+    and [row], is a row of, [source]
+    and [source], opens with, [kind]
+[row], closes, [entity]
+    if [row], is about, [entity]
+    and [row], is of the kind, [kind]
+    and [row], is a row of, [source]
+    and [source], closes with, [kind]
+[entity], has an event at, [time]
+    if [row], is about, [entity]
+    and [row], happened at, [time]
+
+[entity], may be open between, [start], [end]
+    if [row], opens, [entity]
+    and [row], happened at, [start]
+    and [other row], closes, [entity]
+    and [other row], happened at, [end]
+    and [start], is before, [end]
+[entity], changes between, [start], [end]
+    if [entity], may be open between, [start], [end]
+    and [entity], has an event at, [time]
+    and [start], is before, [time]
+    and [time], is before, [end]
+[entity], is open between, [start], [end]
+    if [entity], may be open between, [start], [end]
+    and not [entity], changes between, [start], [end]
+[entity], has an event after, [start]
+    if [row], opens, [entity]
+    and [row], happened at, [start]
+    and [entity], has an event at, [time]
+    and [start], is before, [time]
+[entity], is still open since, [start]
+    if [row], opens, [entity]
+    and [row], happened at, [start]
+    and not [entity], has an event after, [start]
+
+[row], is, an interval start
+    if [row], opens, [entity]
+    and [row], happened at, [start]
+    and [entity], is open between, [start], [any end]
+[row], is, an interval start
+    if [row], opens, [entity]
+    and [row], happened at, [start]
+    and [entity], is still open since, [start]
+[row], is, an interval end
+    if [row], closes, [entity]
+    and [row], happened at, [end]
+    and [entity], is open between, [any start], [end]
+
+[row], breaks, Every open starts an interval
+    if [row], opens, [any entity]
+    and not [row], is, an interval start
+[row], breaks, Every close ends an interval
+    if [row], closes, [any entity]
+    and not [row], is, an interval end
+
+an open twice, adds line, engine_connections.csv, 7000,49,connect
+an open twice, must break, Every open starts an interval
+
+a close without an open, adds line, engine_connections.csv, 9000,99,disconnect
+a close without an open, must break, Every close ends an interval
+a close without an open, must explain, '"engine_connections.csv:8, breaks, Every close ends an interval", holds because, "not engine_connections.csv:8, is, an interval end"'
+
+the knowledge view, shows, [entity] is open between [start] [end]
+the knowledge view, shows, [entity] is still open since [start]

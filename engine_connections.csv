@@ -1,0 +1,7 @@
+at,connection,what
+1000,47,connect
+1000,48,connect
+2500,48,disconnect
+2600,48,connect
+5000,47,disconnect
+6000,49,connect
