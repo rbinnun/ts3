@@ -1,18 +1,23 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/csv"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/google/mangle/analysis"
 	"github.com/google/mangle/ast"
@@ -23,40 +28,146 @@ import (
 )
 
 const (
-	kindString = iota
-	kindNumber
-	kindBlank
+	engineFile        = "kernel/engine.go"
+	toolsFile         = "kernel/tools.go"
+	derivedOrigin     = "derived"
+	theKnowledge      = "the knowledge"
+	theFolder         = "the folder"
+	theCertificate    = "the certificate"
+	brokenAnswer      = "broken"
+	provenAnswer      = "true"
+	changeArgument    = "change"
+	plainLoader       = "rules and facts"
+	rowsLoader        = "a row per line after the first with a cell for each column the first line names"
+	ruleRows          = "every rule"
+	factRows          = "every fact"
+	derivationRows    = "every way a rule derives a fact"
+	reasonRows        = "every reason of every derivation"
+	certificateRows   = "every part the certificate holds"
+	levelNamePart     = "the name of the level being proven"
+	loadedHashPart    = "the hash of every file engine.go loads or the level is tested with"
+	machineHashPart   = "the hash of every file that is part of the machine"
+	answerPart        = "the answer"
+	partContent       = "what the certificate holds"
+	subjectContent    = "the file a hash is of and empty otherwise"
+	valueContent      = "the sha256 of the file in hex or the level name or the answer"
+	derivationIDValue = "the derivation id"
 )
 
-const (
-	engineFile     = "engine.go"
-	toolsFile      = "tools.go"
-	derivedOrigin  = "derived"
-	levelStore     = "the level store"
-	partLevel      = "the name of the level being proven"
-	partHash       = "the hash of every file engine.go loads or the level is tested with"
-	partAnswer     = "the answer"
-	changeVariable = "PLAIN_CHANGE"
-	auxPrefix      = "derivation__"
-)
+var computations = map[string]string{
+	"a rule id":                     "the first 16 hex digits of the sha256 of the rule lines joined by newlines",
+	"a fact id":                     "the first 16 hex digits of the sha256 of the fact as one plain line",
+	"a derivation id":               "the first 16 hex digits of the sha256 of the fact and the rule name and the reasons as plain lines joined by newlines",
+	"a row name":                    "the file name and a colon and the line number",
+	"a cell value":                  "the cell text read as a plain value",
+	"a quoted value":                "a value between double quotes unless it holds a double quote and no single quote and then between single quotes",
+	"a quote inside a quoted value": "the quote the value is between written twice",
+	"a missing fact":                "a fact a level expects that the knowledge does not hold without the facts about what is missing or present",
+	"a present fact":                "a fact a level rules out that the knowledge holds without the facts about what is missing or present",
+	"an agent file":                 "agent.plain in a level folder which an agent writes and may rewrite on any run",
+	"a level":                       "a folder next to the kernel folder named by the folder name",
+	"the level being proven":        "the level whose folder runme.sh is run in",
+	"a level file":                  "human.plain or agent.plain in the level folder",
+	"a level store":                 "the level name followed by .db in the folder that holds the level folders",
+	"a loaded level":                "the level being proven and every level a loaded level builds on where a level with no folder loads nothing",
+	"a loaded file":                 "a level file of a loaded level and every file a level file says engine.go loads",
+	"a tested file":                 "a file the level being proven is tested with found in its folder and loaded like a file engine.go loads",
+	"a file name":                   "the path of the file from the folder that holds the level folders",
+	"a proven level":                "a loaded level other than the level being proven whose store holds a certificate with the answer true and with the hash of every file it names as that file is now",
+	"a certified file":              "a file loaded from the folder of a proven level",
+	"a private fact":                "a fact of a private fact pattern which engine.go does not load from a certified file",
+}
+
+var selfDescriptions = map[string]bool{
+	"engine.go, prints, the knowledge":               true,
+	"engine.go, prints in, plain language":           true,
+	"engine.go, prints to, standard output":          true,
+	"the knowledge, is published to, the store":      true,
+	"the store, is the sqlite file, the level store": true,
+}
+
+var describedPredicates = []predicate{
+	{"prints", 2}, {"prints in", 2}, {"prints to", 2}, {"is published to", 2}, {"is the sqlite file", 2},
+}
+
+var rowContents = map[string][]string{
+	ruleRows:        {"the rule id", "the rule name", "the file the rule is in", "the number of the line the rule starts on", "the rule lines joined by newlines"},
+	factRows:        {"the fact id", "the fact as one plain line", "the go file that observed the fact and derived for every other fact"},
+	derivationRows:  {derivationIDValue, "the fact id", "the rule name"},
+	reasonRows:      {derivationIDValue, "the number of the condition in the rule", "the condition with its blanks filled as one plain line"},
+	certificateRows: {partContent, subjectContent, valueContent},
+}
+
+var certificateParts = map[string]bool{levelNamePart: true, loadedHashPart: true, machineHashPart: true, answerPart: true}
+
+var mangleKeywords = map[string]bool{"do": true, "let": true, "bound": true, "descr": true, "inclusion": true}
 
 var (
-	phraseRe = regexp.MustCompile(`^[a-z][a-z0-9]*( [a-z0-9]+)*$`)
-	numberRe = regexp.MustCompile(`^(0|-?[1-9][0-9]*)$`)
-	blankRe  = regexp.MustCompile(`^\[([^\[\]]+)\]$`)
-	nameRe   = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
-	keywords = map[string]bool{"descr": true, "inclusion": true, "opt": true, "bound": true, "let": true, "do": true}
+	blankPattern  = regexp.MustCompile(`^\[([^\[\]]*)\]$`)
+	numberPattern = regexp.MustCompile(`^-?[0-9]+$`)
+	namePattern   = regexp.MustCompile(`^[a-z][a-z0-9]*( [a-z0-9]+)*$`)
+	sqlName       = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 )
 
-type value struct {
-	kind int
-	text string
-	num  int64
+type termKind int
+
+const (
+	textTerm termKind = iota
+	numberTerm
+	blankTerm
+)
+
+type term struct {
+	kind   termKind
+	text   string
+	number int64
+}
+
+func textOf(s string) term     { return term{kind: textTerm, text: s} }
+func numberOf(n int64) term    { return term{kind: numberTerm, number: n} }
+func blankOf(name string) term { return term{kind: blankTerm, text: name} }
+
+func (t term) plain() string {
+	if t.kind == numberTerm {
+		return strconv.FormatInt(t.number, 10)
+	}
+	return t.text
+}
+
+type predicate struct {
+	name  string
+	arity int
 }
 
 type atom struct {
-	pred string
-	args []value
+	name string
+	args []term
+}
+
+func (a atom) predicate() predicate { return predicate{a.name, len(a.args)} }
+
+func (a atom) line() string { return renderAtom(a, false) }
+
+type builtin struct {
+	arity     int
+	format    string
+	assigning bool
+}
+
+var builtins = map[string]builtin{
+	"ends with":            {2, ":string:ends_with(%[1]s, %[2]s)", false},
+	"starts with":          {2, ":string:starts_with(%[1]s, %[2]s)", false},
+	"differs from":         {2, "%[1]s != %[2]s", false},
+	"is before":            {2, ":lt(%[1]s, %[2]s)", false},
+	"is the difference of": {3, "%[1]s = fn:minus(%[2]s, %[3]s)", true},
+	"is at most":           {2, ":le(%[1]s, %[2]s)", false},
+	"is one more than":     {2, "%[1]s = fn:plus(%[2]s, 1)", true},
+	"is the join of":       {3, "%[1]s = fn:string:concat(%[2]s, %[3]s)", true},
+}
+
+func (a atom) builtin() (builtin, bool) {
+	b, ok := builtins[a.name]
+	return b, ok && len(a.args) == b.arity
 }
 
 type condition struct {
@@ -64,1681 +175,1603 @@ type condition struct {
 	atom    atom
 }
 
+func (c condition) line() string {
+	if c.negated {
+		return "not " + renderAtom(c.atom, true)
+	}
+	return renderAtom(c.atom, true)
+}
+
 type rule struct {
-	name  string
-	file  string
-	line  int
-	lines []string
-	head  atom
-	conds []condition
-	level string
-	bad   bool
-	body  string
-	index int
+	file       string
+	line       int
+	lines      []string
+	head       atom
+	conditions []condition
 }
 
-type loadedFile struct {
-	name      string
-	path      string
-	level     string
-	kind      string
-	data      []byte
-	tested    bool
-	certified bool
-	rules     []*rule
-}
+func (r *rule) name() string { return fmt.Sprintf("%s:%d", r.file, r.line) }
 
-type template struct {
-	args      []value
-	text      string
-	constants int
-}
+func (r *rule) text() string { return strings.Join(r.lines, "\n") }
 
-type pattern struct {
-	phrase string
-	arity  int
-	slots  []string
-}
+func (r *rule) id() string { return shortHash(r.text()) }
 
-type derivation struct {
-	fact    string
-	atom    ast.Atom
-	rule    *rule
-	reasons []string
-}
-
-type call struct {
-	command ast.Constant
-	tool    string
-	input   string
-	key     string
-}
-
-type machine struct {
-	kernelDir   string
-	root        string
-	level       string
-	folder      string
-	change      string
-	levels      []string
-	files       []*loadedFile
-	rules       []*rule
-	problems    []string
-	proven      map[string]bool
-	templates   map[string][]template
-	decls       map[string]int
-	observed    []ast.Atom
-	origins     map[string]string
-	toolFacts   []ast.Atom
-	ran         map[string]bool
-	program     string
-	info        *analysis.ProgramInfo
-	store       factstore.FactStore
-	derivations []derivation
-	reasonKeys  map[string]bool
-}
-
-func main() {
-	os.Exit(run())
-}
-
-func run() int {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "engine.go needs the kernel folder")
-		return 2
+func (r *rule) readBack() string {
+	lines := []string{renderAtom(r.head, false)}
+	for i, c := range r.conditions {
+		word := "and"
+		if i == 0 {
+			word = "if"
+		}
+		lines = append(lines, "    "+word+" "+c.line())
 	}
-	kernelDir, err := filepath.Abs(os.Args[1])
+	return strings.Join(lines, "\n")
+}
+
+func (r *rule) atoms() []atom {
+	atoms := []atom{r.head}
+	for _, c := range r.conditions {
+		atoms = append(atoms, c.atom)
+	}
+	return atoms
+}
+
+func shortHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+func fileHash(name string) string {
+	content, err := os.ReadFile(name)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
+		return ""
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 2
-	}
-	m := newMachine(kernelDir, cwd)
-	m.load()
-	if len(m.problems) > 0 {
-		return m.fail()
-	}
-	m.observeRules()
-	m.compile()
-	if len(m.problems) > 0 {
-		return m.fail()
-	}
-	for {
-		if err := m.evaluate(); err != nil {
-			m.problem("the rules cannot be evaluated: " + err.Error())
-			return m.fail()
-		}
-		calls := m.pendingCalls()
-		if len(calls) == 0 {
-			break
-		}
-		m.runCalls(calls)
-	}
-	answer := m.answer()
-	publish := m.publishedWhen(answer)
-	if err := m.derive(publish); err != nil {
-		m.problem("the reasons cannot be found: " + err.Error())
-		return m.fail()
-	}
-	m.giveReasons()
-	m.print()
-	if publish {
-		if err := m.publish(answer); err != nil {
-			fmt.Fprintln(os.Stderr, "the knowledge cannot be published:", err)
-		}
-	} else {
-		m.unpublish()
-	}
-	return m.exitCode(answer)
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
 }
 
-func newMachine(kernelDir, cwd string) *machine {
-	m := &machine{
-		kernelDir:  kernelDir,
-		root:       filepath.Dir(kernelDir),
-		level:      filepath.Base(cwd),
-		change:     os.Getenv(changeVariable),
-		proven:     map[string]bool{},
-		templates:  map[string][]template{},
-		decls:      map[string]int{},
-		origins:    map[string]string{},
-		ran:        map[string]bool{},
-		reasonKeys: map[string]bool{},
-	}
-	m.folder = filepath.Join(m.root, m.level)
-	return m
+type element struct {
+	value  string
+	quoted bool
 }
 
-func (m *machine) problem(text string) {
-	m.problems = append(m.problems, text)
-}
-
-func str(s string) value {
-	return value{kind: kindString, text: s}
-}
-
-func key(phrase string, arity int) string {
-	return phrase + "/" + strconv.Itoa(arity)
-}
-
-func (a atom) key() string {
-	return key(a.pred, len(a.args))
-}
-
-func mangleName(phrase string) string {
-	n := strings.ReplaceAll(phrase, " ", "_")
-	if keywords[n] {
-		n += "_"
-	}
-	return n
-}
-
-func phraseOf(name string) string {
-	n := name
-	if strings.HasSuffix(n, "_") && keywords[strings.TrimSuffix(n, "_")] {
-		n = strings.TrimSuffix(n, "_")
-	}
-	return strings.ReplaceAll(n, "_", " ")
-}
-
-func sha16(s string) string {
-	h := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(h[:])[:16]
-}
-
-func shaHex(data []byte) string {
-	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:])
-}
-
-func splitParts(line string) ([]string, error) {
-	var parts []string
+func splitElements(line string) ([]element, error) {
+	var elements []element
 	i := 0
 	for {
+		for i < len(line) && line[i] == ' ' {
+			i++
+		}
 		if i < len(line) && (line[i] == '"' || line[i] == '\'') {
-			q := line[i]
-			end := -1
-			for j := i + 1; j < len(line); j++ {
-				if line[j] == q && (j+1 == len(line) || strings.HasPrefix(line[j+1:], ", ")) {
-					end = j
+			quote := line[i]
+			var value strings.Builder
+			j := i + 1
+			closed := false
+			for j < len(line) {
+				if line[j] == quote {
+					if j+1 < len(line) && line[j+1] == quote {
+						value.WriteByte(quote)
+						j += 2
+						continue
+					}
+					closed = true
+					j++
 					break
 				}
+				value.WriteByte(line[j])
+				j++
 			}
-			if end < 0 {
+			if !closed {
 				return nil, errors.New("a quote is never closed")
 			}
-			parts = append(parts, line[i:end+1])
-			i = end + 1
-			if i == len(line) {
-				return parts, nil
+			elements = append(elements, element{value.String(), true})
+			for j < len(line) && line[j] == ' ' {
+				j++
 			}
-			i += 2
+			if j == len(line) {
+				return elements, nil
+			}
+			if line[j] != ',' {
+				return nil, fmt.Errorf("a quoted value is followed by %s", line[j:])
+			}
+			i = j + 1
 			continue
 		}
-		k := strings.Index(line[i:], ", ")
-		if k < 0 {
-			return append(parts, line[i:]), nil
+		end := strings.IndexByte(line[i:], ',')
+		if end < 0 {
+			value := strings.TrimSpace(line[i:])
+			if value == "" {
+				return nil, errors.New("a part is empty")
+			}
+			return append(elements, element{value, false}), nil
 		}
-		parts = append(parts, line[i:i+k])
-		i += k + 2
+		value := strings.TrimSpace(line[i : i+end])
+		if value == "" {
+			return nil, errors.New("a part is empty")
+		}
+		elements = append(elements, element{value, false})
+		i += end + 1
 	}
 }
 
-func parseValue(raw string) value {
-	if len(raw) >= 2 && (raw[0] == '"' || raw[0] == '\'') && raw[len(raw)-1] == raw[0] {
-		return str(raw[1 : len(raw)-1])
+func termOf(e element, blanks bool) (term, error) {
+	if e.quoted {
+		return textOf(e.value), nil
 	}
-	if numberRe.MatchString(raw) {
-		if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
-			return value{kind: kindNumber, num: n}
+	if match := blankPattern.FindStringSubmatch(e.value); match != nil {
+		if !blanks {
+			return term{}, fmt.Errorf("%s is a blank where no blank can be", e.value)
+		}
+		if !namePattern.MatchString(match[1]) {
+			return term{}, fmt.Errorf("%s is not a blank name", e.value)
+		}
+		return blankOf(match[1]), nil
+	}
+	if numberPattern.MatchString(e.value) {
+		if n, err := strconv.ParseInt(e.value, 10, 64); err == nil {
+			return numberOf(n), nil
 		}
 	}
-	if sub := blankRe.FindStringSubmatch(raw); sub != nil {
-		return value{kind: kindBlank, text: sub[1]}
-	}
-	return str(raw)
+	return textOf(e.value), nil
 }
 
-func needsQuotes(s string) bool {
-	if s == "" || strings.Contains(s, ", ") || strings.ContainsAny(s, "\n\r") {
-		return true
+func plainValue(text string) term {
+	text = strings.TrimSpace(text)
+	if elements, err := splitElements(text); err == nil && len(elements) == 1 && elements[0].quoted {
+		return textOf(elements[0].value)
 	}
-	if s[0] == ' ' || s[len(s)-1] == ' ' || s[0] == '"' || s[0] == '\'' {
-		return true
+	if t, err := termOf(element{text, false}, false); err == nil {
+		return t
 	}
-	return numberRe.MatchString(s) || blankRe.MatchString(s)
+	return textOf(text)
 }
 
-func quoteIfNeeded(s string) string {
-	if !needsQuotes(s) {
-		return s
-	}
-	switch {
-	case !strings.Contains(s, `"`):
-		return `"` + s + `"`
-	case !strings.Contains(s, "'"):
-		return "'" + s + "'"
-	case !strings.Contains(s, `", `):
-		return `"` + s + `"`
-	}
-	return "'" + s + "'"
+func isName(e element, t term) bool {
+	return !e.quoted && t.kind == textTerm && namePattern.MatchString(t.text)
 }
 
-func formatValue(v value) string {
-	switch v.kind {
-	case kindNumber:
-		return strconv.FormatInt(v.num, 10)
-	case kindBlank:
-		return "[" + v.text + "]"
+func makeAtom(elements []element, blanks, builtinsAllowed bool) (atom, error) {
+	terms := make([]term, len(elements))
+	for i, e := range elements {
+		t, err := termOf(e, blanks)
+		if err != nil {
+			return atom{}, err
+		}
+		terms[i] = t
 	}
-	return quoteIfNeeded(v.text)
+	switch len(elements) {
+	case 1:
+		if !isName(elements[0], terms[0]) {
+			return atom{}, fmt.Errorf("%s is not a sentence", elements[0].value)
+		}
+		return atom{name: terms[0].text}, nil
+	case 2:
+		return atom{}, errors.New("a statement has one part or at least three, not two")
+	}
+	if !isName(elements[1], terms[1]) {
+		return atom{}, fmt.Errorf("%s is not a verb", elements[1].value)
+	}
+	if terms[1].text == "is" {
+		if len(elements) != 3 || !isName(elements[2], terms[2]) {
+			return atom{}, errors.New("is takes one subject and one name")
+		}
+		return atom{name: terms[2].text, args: []term{terms[0]}}, nil
+	}
+	args := append([]term{terms[0]}, terms[2:]...)
+	a := atom{name: terms[1].text, args: args}
+	if _, ok := a.builtin(); ok && !builtinsAllowed {
+		return atom{}, fmt.Errorf("%s can only be a condition", a.name)
+	}
+	return a, nil
 }
 
-func parseAtom(text string) (atom, error) {
-	parts, err := splitParts(text)
+func parseLine(line string, blanks, builtinsAllowed bool) (atom, error) {
+	elements, err := splitElements(line)
 	if err != nil {
 		return atom{}, err
 	}
-	if len(parts) == 1 {
-		if !phraseRe.MatchString(parts[0]) {
-			return atom{}, errors.New("a sentence must be plain lowercase words")
-		}
-		return atom{pred: parts[0]}, nil
-	}
-	if len(parts) == 2 {
-		return atom{}, errors.New("a statement needs a subject, a verb and what the verb is about")
-	}
-	verb := parts[1]
-	if !phraseRe.MatchString(verb) {
-		return atom{}, errors.New("the verb must be plain lowercase words")
-	}
-	subject := parseValue(parts[0])
-	if verb == "is" {
-		if len(parts) != 3 || !phraseRe.MatchString(parts[2]) {
-			return atom{}, errors.New("what something is must be plain lowercase words")
-		}
-		return atom{pred: parts[2], args: []value{subject}}, nil
-	}
-	args := []value{subject}
-	for _, p := range parts[2:] {
-		args = append(args, parseValue(p))
-	}
-	return atom{pred: verb, args: args}, nil
+	return makeAtom(elements, blanks, builtinsAllowed)
 }
 
-func formatAtom(a atom) string {
+func parseFact(line string) (atom, error) { return parseLine(line, false, false) }
+
+func parsePattern(s string) (atom, error) {
+	if strings.Contains(s, ",") {
+		return parseLine(s, true, true)
+	}
+	var tokens []term
+	rest := s
+	for rest != "" {
+		open := strings.IndexByte(rest, '[')
+		if open < 0 {
+			if words := strings.TrimSpace(rest); words != "" {
+				tokens = append(tokens, textOf(words))
+			}
+			break
+		}
+		if words := strings.TrimSpace(rest[:open]); words != "" {
+			tokens = append(tokens, textOf(words))
+		}
+		end := strings.IndexByte(rest[open:], ']')
+		if end < 0 {
+			return atom{}, fmt.Errorf("%s has a blank that is never closed", s)
+		}
+		name := rest[open+1 : open+end]
+		if !namePattern.MatchString(name) {
+			return atom{}, fmt.Errorf("%s has the blank [%s] which is not a blank name", s, name)
+		}
+		tokens = append(tokens, blankOf(name))
+		rest = rest[open+end+1:]
+	}
+	if len(tokens) == 1 && tokens[0].kind == textTerm && namePattern.MatchString(tokens[0].text) {
+		return atom{name: tokens[0].text}, nil
+	}
+	if len(tokens) < 2 || tokens[0].kind != blankTerm || tokens[1].kind != textTerm || !namePattern.MatchString(tokens[1].text) {
+		return atom{}, fmt.Errorf("%s is not a fact pattern", s)
+	}
+	for _, t := range tokens[2:] {
+		if t.kind != blankTerm {
+			return atom{}, fmt.Errorf("%s is not a fact pattern", s)
+		}
+	}
+	verb := tokens[1].text
+	if len(tokens) == 2 {
+		if !strings.HasPrefix(verb, "is ") {
+			return atom{}, fmt.Errorf("%s is not a fact pattern", s)
+		}
+		return atom{name: strings.TrimPrefix(verb, "is "), args: []term{tokens[0]}}, nil
+	}
+	return atom{name: verb, args: append([]term{tokens[0]}, tokens[2:]...)}, nil
+}
+
+func needsQuotes(s string, leading bool) bool {
+	return s == "" ||
+		strings.ContainsAny(s, ",\n\r") ||
+		s != strings.TrimSpace(s) ||
+		s[0] == '"' || s[0] == '\'' ||
+		numberPattern.MatchString(s) ||
+		blankPattern.MatchString(s) ||
+		(leading && strings.HasPrefix(s, "not "))
+}
+
+func quoteValue(s string) string {
+	quote := `"`
+	if strings.Contains(s, `"`) && !strings.Contains(s, "'") {
+		quote = "'"
+	}
+	return quote + strings.ReplaceAll(s, quote, quote+quote) + quote
+}
+
+func renderTerm(t term, leading bool) string {
+	switch t.kind {
+	case numberTerm:
+		return strconv.FormatInt(t.number, 10)
+	case blankTerm:
+		return "[" + t.text + "]"
+	}
+	if needsQuotes(t.text, leading) {
+		return quoteValue(t.text)
+	}
+	return t.text
+}
+
+func renderAtom(a atom, leading bool) string {
 	switch len(a.args) {
 	case 0:
-		return a.pred
+		return a.name
 	case 1:
-		return formatValue(a.args[0]) + ", is, " + a.pred
+		return renderTerm(a.args[0], leading) + ", is, " + a.name
 	}
-	parts := []string{formatValue(a.args[0]), a.pred}
-	for _, v := range a.args[1:] {
-		parts = append(parts, formatValue(v))
+	parts := []string{renderTerm(a.args[0], leading), a.name}
+	for _, t := range a.args[1:] {
+		parts = append(parts, renderTerm(t, false))
 	}
 	return strings.Join(parts, ", ")
 }
 
-func parsePattern(s string) (pattern, bool) {
-	type item struct {
-		blank bool
-		text  string
-	}
-	var items []item
-	i := 0
-	for i < len(s) {
-		c := s[i]
-		if c == ' ' {
-			i++
-			continue
+func conditionBody(line string) (string, bool) {
+	for _, prefix := range []string{"    if ", "    and "} {
+		if strings.HasPrefix(line, prefix) {
+			return line[len(prefix):], true
 		}
-		if c == '[' {
-			j := strings.IndexByte(s[i:], ']')
-			if j < 0 {
-				return pattern{}, false
-			}
-			name := s[i+1 : i+j]
-			if name == "" || strings.Contains(name, "[") {
-				return pattern{}, false
-			}
-			items = append(items, item{blank: true, text: name})
-			i += j + 1
-			continue
-		}
-		j := i
-		for j < len(s) && s[j] != ' ' && s[j] != '[' {
-			j++
-		}
-		items = append(items, item{text: s[i:j]})
-		i = j
 	}
-	if len(items) == 0 {
-		return pattern{}, false
-	}
-	hasBlank := false
-	for _, it := range items {
-		hasBlank = hasBlank || it.blank
-	}
-	if !hasBlank {
-		if !phraseRe.MatchString(s) {
-			return pattern{}, false
-		}
-		return pattern{phrase: s}, true
-	}
-	if !items[0].blank {
-		return pattern{}, false
-	}
-	k := 1
-	var verb []string
-	for k < len(items) && !items[k].blank {
-		verb = append(verb, items[k].text)
-		k++
-	}
-	if len(verb) == 0 {
-		return pattern{}, false
-	}
-	slots := []string{items[0].text}
-	for ; k < len(items); k++ {
-		if !items[k].blank {
-			return pattern{}, false
-		}
-		slots = append(slots, items[k].text)
-	}
-	v := strings.Join(verb, " ")
-	if !phraseRe.MatchString(v) {
-		return pattern{}, false
-	}
-	if len(slots) == 1 {
-		if !strings.HasPrefix(v, "is ") {
-			return pattern{}, false
-		}
-		return pattern{phrase: v[3:], arity: 1, slots: slots}, true
-	}
-	if v == "is" {
-		return pattern{}, false
-	}
-	return pattern{phrase: v, arity: len(slots), slots: slots}, true
+	return "", false
 }
 
-func (p pattern) key() string {
-	return key(p.phrase, p.arity)
-}
-
-func varName(blank string) string {
-	var b strings.Builder
-	word := true
-	for i := 0; i < len(blank); i++ {
-		c := blank[i]
-		isLetter := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-		isDigit := c >= '0' && c <= '9'
-		if !isLetter && !isDigit {
-			word = true
+func parsePlain(file string, content string) ([]*rule, []string) {
+	var rules []*rule
+	var problems []string
+	var current *rule
+	if content == "" {
+		return nil, nil
+	}
+	for i, line := range strings.Split(strings.TrimSuffix(content, "\n"), "\n") {
+		where := fmt.Sprintf("%s:%d", file, i+1)
+		if strings.TrimSpace(line) == "" {
+			current = nil
 			continue
 		}
-		if word && c >= 'a' && c <= 'z' {
-			c = c - 'a' + 'A'
+		if body, ok := conditionBody(line); ok {
+			if current == nil {
+				problems = append(problems, where+": a condition has no statement above it")
+				continue
+			}
+			negated := strings.HasPrefix(body, "not ")
+			if negated {
+				body = body[len("not "):]
+			}
+			a, err := parseLine(body, true, true)
+			if err != nil {
+				problems = append(problems, where+": "+err.Error())
+				continue
+			}
+			current.conditions = append(current.conditions, condition{negated, a})
+			current.lines = append(current.lines, line)
+			continue
 		}
-		b.WriteByte(c)
-		word = false
+		if line[0] == ' ' || line[0] == '\t' {
+			problems = append(problems, where+": an indented line must start with if or and")
+			current = nil
+			continue
+		}
+		a, err := parseLine(line, true, false)
+		if err != nil {
+			problems = append(problems, where+": "+err.Error())
+			current = nil
+			continue
+		}
+		current = &rule{file: file, line: i + 1, lines: []string{line}, head: a}
+		rules = append(rules, current)
 	}
-	s := b.String()
-	if s == "" || s[0] < 'A' || s[0] > 'Z' {
-		s = "V" + s
+	return rules, problems
+}
+
+func mangleName(name string) string { return strings.ReplaceAll(name, " ", "_") }
+
+func mangleVariable(name string) string {
+	words := strings.Fields(name)
+	for i, w := range words {
+		words[i] = strings.ToUpper(w[:1]) + w[1:]
 	}
-	return s
+	return strings.Join(words, "")
 }
 
 func mangleString(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')
-	for i := 0; i < len(s); i++ {
-		c := s[i]
+	for _, r := range s {
 		switch {
-		case c == '\\':
+		case r == '\\':
 			b.WriteString(`\\`)
-		case c == '"':
+		case r == '"':
 			b.WriteString(`\"`)
-		case c == '\n':
+		case r == '\n':
 			b.WriteString(`\n`)
-		case c == '\t':
+		case r == '\t':
 			b.WriteString(`\t`)
-		case c < 0x20:
-			fmt.Fprintf(&b, `\x%02x`, c)
+		case r < 0x20:
+			fmt.Fprintf(&b, `\x%02x`, r)
 		default:
-			b.WriteByte(c)
+			b.WriteRune(r)
 		}
 	}
 	b.WriteByte('"')
 	return b.String()
 }
 
-func mangleTerm(v value) string {
-	switch v.kind {
-	case kindNumber:
-		return strconv.FormatInt(v.num, 10)
-	case kindBlank:
-		return varName(v.text)
+func mangleTerm(t term, hidden map[string]bool) string {
+	switch t.kind {
+	case numberTerm:
+		return strconv.FormatInt(t.number, 10)
+	case blankTerm:
+		if hidden[t.text] {
+			return "_"
+		}
+		return mangleVariable(t.text)
 	}
-	return mangleString(v.text)
+	return mangleString(t.text)
 }
 
-func mangleAtom(a atom) string {
-	terms := make([]string, len(a.args))
-	for i, v := range a.args {
-		terms[i] = mangleTerm(v)
+func mangleAtom(a atom, hidden map[string]bool) string {
+	args := make([]any, len(a.args))
+	texts := make([]string, len(a.args))
+	for i, t := range a.args {
+		texts[i] = mangleTerm(t, hidden)
+		args[i] = texts[i]
 	}
-	return mangleName(a.pred) + "(" + strings.Join(terms, ", ") + ")"
+	if b, ok := a.builtin(); ok {
+		return fmt.Sprintf(b.format, args...)
+	}
+	return mangleName(a.name) + "(" + strings.Join(texts, ", ") + ")"
 }
 
-func sameValue(a, b value) bool {
-	return a.kind == b.kind && a.text == b.text && a.num == b.num
+func mangleLine(line string) (string, error) {
+	a, err := parseLine(line, true, true)
+	if err != nil {
+		return "", err
+	}
+	if _, ok := a.builtin(); ok {
+		return mangleAtom(a, nil), nil
+	}
+	return mangleAtom(a, nil) + ".", nil
 }
 
-func isIdentStart(c byte) bool {
-	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-}
-
-func isIdentChar(c byte) bool {
-	return isIdentStart(c) || (c >= '0' && c <= '9')
-}
-
-func replaceVariables(text string, sub map[string]string) string {
-	var b strings.Builder
-	i := 0
-	for i < len(text) {
-		c := text[i]
-		if c == '"' || c == '\'' {
-			j := i + 1
-			for j < len(text) && text[j] != c {
-				if text[j] == '\\' {
-					j++
-				}
-				j++
+func blankUses(r *rule) map[string]int {
+	uses := map[string]int{}
+	for _, a := range r.atoms() {
+		for _, t := range a.args {
+			if t.kind == blankTerm {
+				uses[t.text]++
 			}
-			j++
-			if j > len(text) {
-				j = len(text)
-			}
-			b.WriteString(text[i:j])
-			i = j
+		}
+	}
+	return uses
+}
+
+func hiddenBlanks(r *rule) map[string]bool {
+	uses := blankUses(r)
+	hidden := map[string]bool{}
+	for _, c := range r.conditions {
+		if !c.negated {
 			continue
 		}
-		if isIdentStart(c) {
-			j := i
-			for j < len(text) && isIdentChar(text[j]) {
-				j++
-			}
-			word := text[i:j]
-			if r, ok := sub[word]; ok && (i == 0 || text[i-1] != ':') {
-				b.WriteString(r)
-			} else {
-				b.WriteString(word)
-			}
-			i = j
-			continue
-		}
-		b.WriteByte(c)
-		i++
-	}
-	return b.String()
-}
-
-func expand(t template, a atom) (string, bool) {
-	if len(t.args) != len(a.args) {
-		return "", false
-	}
-	sub := map[string]string{}
-	for i, ta := range t.args {
-		if ta.kind == kindBlank {
-			sub[varName(ta.text)] = mangleTerm(a.args[i])
-			continue
-		}
-		if !sameValue(ta, a.args[i]) {
-			return "", false
-		}
-	}
-	return replaceVariables(t.text, sub), true
-}
-
-func (m *machine) mangleCondition(c condition) (string, error) {
-	if ts, ok := m.templates[c.atom.key()]; ok {
-		for _, t := range ts {
-			if s, ok := expand(t, c.atom); ok {
-				if c.negated {
-					return "", fmt.Errorf("%s cannot be negated", c.atom.pred)
-				}
-				return s, nil
+		for _, t := range c.atom.args {
+			if t.kind == blankTerm && uses[t.text] == 1 {
+				hidden[t.text] = true
 			}
 		}
-		return "", fmt.Errorf("no meaning in mangle fits %s", formatAtom(c.atom))
 	}
-	s := mangleAtom(c.atom)
-	if c.negated {
-		s = "!" + s
-	}
-	return s, nil
+	return hidden
 }
 
-func (r *rule) canonical() string {
-	var b strings.Builder
-	b.WriteString(formatAtom(r.head))
-	for i, c := range r.conds {
-		if i == 0 {
-			b.WriteString("\n    if ")
-		} else {
-			b.WriteString("\n    and ")
+func ruleBlanks(r *rule, hidden map[string]bool) []string {
+	var names []string
+	seen := map[string]bool{}
+	for _, a := range r.atoms() {
+		for _, t := range a.args {
+			if t.kind == blankTerm && !hidden[t.text] && !seen[t.text] {
+				seen[t.text] = true
+				names = append(names, t.text)
+			}
 		}
+	}
+	return names
+}
+
+func mangleBody(r *rule, hidden map[string]bool) string {
+	parts := make([]string, len(r.conditions))
+	for i, c := range r.conditions {
+		parts[i] = mangleAtom(c.atom, hidden)
 		if c.negated {
-			b.WriteString("not ")
+			parts[i] = "!" + parts[i]
 		}
-		b.WriteString(formatAtom(c.atom))
 	}
-	return b.String()
+	return strings.Join(parts, ", ")
 }
 
-func (r *rule) text() string {
-	return strings.Join(r.lines, "\n")
-}
-
-func (r *rule) atoms() []atom {
-	out := []atom{r.head}
-	for _, c := range r.conds {
-		out = append(out, c.atom)
+func mangleRule(r *rule) string {
+	head := mangleAtom(r.head, nil)
+	if len(r.conditions) == 0 {
+		return head + "."
 	}
-	return out
+	return head + " :- " + mangleBody(r, hiddenBlanks(r)) + "."
 }
 
-func (r *rule) fact(pred string, arity int) bool {
-	return len(r.conds) == 0 && r.head.pred == pred && len(r.head.args) == arity
+func derivationName(index int) string { return fmt.Sprintf("derivation__%d", index) }
+
+func derivationRule(index int, r *rule) string {
+	hidden := hiddenBlanks(r)
+	names := ruleBlanks(r, hidden)
+	variables := make([]string, len(names))
+	for i, name := range names {
+		variables[i] = mangleVariable(name)
+	}
+	return derivationName(index) + "(" + strings.Join(variables, ", ") + ") :- " + mangleBody(r, hidden) + "."
 }
 
-func fileLines(data []byte) []string {
-	lines := strings.Split(string(data), "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+func ruleProblems(r *rule) []string {
+	var problems []string
+	hidden := hiddenBlanks(r)
+	bound := map[string]bool{}
+	reported := map[string]bool{}
+	need := func(t term) {
+		if t.kind == blankTerm && !hidden[t.text] && !bound[t.text] && !reported[t.text] {
+			reported[t.text] = true
+			problems = append(problems, fmt.Sprintf("%s leaves [%s] open", r.name(), t.text))
+		}
+	}
+	for _, c := range r.conditions {
+		b, isBuiltin := c.atom.builtin()
+		if c.negated {
+			if isBuiltin {
+				problems = append(problems, fmt.Sprintf("%s cannot say not before %s", r.name(), c.atom.name))
+			}
+			continue
+		}
+		if isBuiltin {
+			first := 0
+			if b.assigning {
+				first = 1
+			}
+			for _, t := range c.atom.args[first:] {
+				need(t)
+			}
+			if b.assigning && c.atom.args[0].kind == blankTerm {
+				bound[c.atom.args[0].text] = true
+			}
+			continue
+		}
+		for _, t := range c.atom.args {
+			if t.kind == blankTerm {
+				bound[t.text] = true
+			}
+		}
+	}
+	for _, c := range r.conditions {
+		if c.negated {
+			for _, t := range c.atom.args {
+				need(t)
+			}
+		}
+	}
+	for _, t := range r.head.args {
+		need(t)
+	}
+	return problems
+}
+
+func toMangle(a atom) ast.Atom {
+	args := make([]ast.BaseTerm, len(a.args))
+	for i, t := range a.args {
+		if t.kind == numberTerm {
+			args[i] = ast.Number(t.number)
+		} else {
+			args[i] = ast.String(t.text)
+		}
+	}
+	return ast.Atom{Predicate: ast.PredicateSym{Symbol: mangleName(a.name), Arity: len(a.args)}, Args: args}
+}
+
+func fromMangle(t ast.BaseTerm) term {
+	c, ok := t.(ast.Constant)
+	if !ok {
+		return textOf(t.String())
+	}
+	if n, err := c.NumberValue(); err == nil {
+		return numberOf(n)
+	}
+	if s, err := c.StringValue(); err == nil {
+		return textOf(s)
+	}
+	return textOf(c.String())
+}
+
+func substitute(a atom, binding map[string]term) atom {
+	args := make([]term, len(a.args))
+	for i, t := range a.args {
+		args[i] = t
+		if t.kind == blankTerm {
+			if value, ok := binding[t.text]; ok {
+				args[i] = value
+			}
+		}
+	}
+	return atom{name: a.name, args: args}
+}
+
+type derivation struct {
+	fact    atom
+	rule    *rule
+	reasons []condition
+}
+
+func (d derivation) lines() []string {
+	lines := []string{d.fact.line(), d.rule.name()}
+	for _, reason := range d.reasons {
+		lines = append(lines, reason.line())
 	}
 	return lines
 }
 
-func (m *machine) parsePlain(f *loadedFile) {
-	var cur *rule
-	for i, l := range fileLines(f.data) {
-		n := i + 1
-		where := fmt.Sprintf("%s:%d", f.name, n)
-		if strings.TrimSpace(l) == "" {
-			cur = nil
-			continue
-		}
-		isIf := strings.HasPrefix(l, "    if ")
-		isAnd := strings.HasPrefix(l, "    and ")
-		if isIf || isAnd {
-			if cur == nil {
-				m.problem(where + " is a condition with no statement before it")
-				continue
-			}
-			if cur.bad {
-				continue
-			}
-			if isIf != (len(cur.conds) == 0) {
-				m.problem(where + " must begin with if for the first condition and with and for the others")
-				cur.bad = true
-				continue
-			}
-			body := strings.TrimPrefix(l, "    if ")
-			if isAnd {
-				body = strings.TrimPrefix(l, "    and ")
-			}
-			negated := strings.HasPrefix(body, "not ")
-			if negated {
-				body = body[4:]
-			}
-			a, err := parseAtom(body)
-			if err != nil {
-				m.problem(fmt.Sprintf("%s cannot be read: %v", where, err))
-				cur.bad = true
-				continue
-			}
-			cur.conds = append(cur.conds, condition{negated: negated, atom: a})
-			cur.lines = append(cur.lines, l)
-			continue
-		}
-		if l[0] == ' ' || l[0] == '\t' {
-			m.problem(where + " is indented but is not a condition")
-			cur = &rule{bad: true}
-			continue
-		}
-		a, err := parseAtom(l)
-		r := &rule{name: where, file: f.name, line: n, lines: []string{l}, head: a, level: f.level}
-		if err != nil {
-			m.problem(fmt.Sprintf("%s cannot be read: %v", where, err))
-			r.bad = true
-		}
-		f.rules = append(f.rules, r)
-		cur = r
-	}
-	kept := f.rules[:0]
-	for _, r := range f.rules {
-		if !r.bad {
-			kept = append(kept, r)
-		}
-	}
-	f.rules = kept
+func (d derivation) id() string { return shortHash(strings.Join(d.lines(), "\n")) }
+
+type knowledge struct {
+	facts       map[string]atom
+	byPredicate map[predicate][]atom
+	derivations []derivation
 }
 
-func (m *machine) readFile(level, name, kind string, tested bool) *loadedFile {
-	path := filepath.Join(m.root, level, name)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	f := &loadedFile{name: name, path: path, level: level, kind: kind, data: data, tested: tested}
-	if kind == "plain" {
-		m.parsePlain(f)
-	}
-	return f
+func newKnowledge() *knowledge {
+	return &knowledge{facts: map[string]atom{}, byPredicate: map[predicate][]atom{}}
 }
 
-func exists(path string) bool {
-	st, err := os.Stat(path)
-	return err == nil && !st.IsDir()
-}
-
-func isDir(path string) bool {
-	st, err := os.Stat(path)
-	return err == nil && st.IsDir()
-}
-
-func (m *machine) load() {
-	seen := map[string]bool{m.level: true}
-	m.levels = []string{m.level}
-	levelFiles := map[string]*loadedFile{}
-	for i := 0; i < len(m.levels); i++ {
-		l := m.levels[i]
-		if !isDir(filepath.Join(m.root, l)) {
-			if l == m.level {
-				m.problem(fmt.Sprintf("the level %s has no folder next to the kernel folder", l))
-			}
-			continue
-		}
-		f := m.readFile(l, l+".plain", "plain", false)
-		if f == nil {
-			m.problem(fmt.Sprintf("the level %s has no level file %s.plain", l, l))
-			continue
-		}
-		levelFiles[l] = f
-		for _, r := range f.rules {
-			if r.fact("builds on", 2) && r.head.args[1].kind == kindString {
-				o := r.head.args[1].text
-				if !seen[o] {
-					seen[o] = true
-					m.levels = append(m.levels, o)
-				}
-			}
-		}
-	}
-	endings := map[string]string{}
-	loadedAs := map[string]string{}
-	privateKeys := map[string]bool{}
-	for _, l := range m.levels {
-		f := levelFiles[l]
-		if f == nil {
-			continue
-		}
-		for _, r := range f.rules {
-			if len(r.conds) > 0 {
-				continue
-			}
-			args := r.head.args
-			switch {
-			case r.fact("means", 2) && args[0].kind == kindString && args[1].kind == kindString:
-				endings[args[0].text] = args[1].text
-			case r.fact("is loaded as", 2) && args[0].kind == kindString && args[1].kind == kindString:
-				loadedAs[args[0].text] = args[1].text
-			case r.fact("private to its level", 1) && args[0].kind == kindString:
-				if p, ok := parsePattern(args[0].text); ok {
-					privateKeys[p.key()] = true
-				}
-			}
-		}
-	}
-	kindOf := func(name string) (string, bool) {
-		best, language := "", ""
-		for ending, lang := range endings {
-			if strings.HasSuffix(name, ending) && len(ending) > len(best) {
-				best, language = ending, lang
-			}
-		}
-		switch loadedAs[language] {
-		case "rules and facts":
-			return "plain", true
-		case "a row per line with a cell per column":
-			return "rows", true
-		}
-		return "", false
-	}
-	groups := map[string][]*loadedFile{}
-	for _, l := range m.levels {
-		f := levelFiles[l]
-		if f == nil {
-			continue
-		}
-		group := []*loadedFile{f}
-		names := map[string]bool{f.name: true}
-		add := func(name string, tested bool) {
-			if names[name] || !exists(filepath.Join(m.root, l, name)) {
-				return
-			}
-			names[name] = true
-			kind, ok := kindOf(name)
-			if !ok {
-				m.problem(fmt.Sprintf("%s cannot be loaded because nothing says how to load it", name))
-				return
-			}
-			if g := m.readFile(l, name, kind, tested); g != nil {
-				group = append(group, g)
-			}
-		}
-		for _, r := range f.rules {
-			if r.fact("loads", 2) && r.head.args[0].kind == kindString && r.head.args[0].text == engineFile && r.head.args[1].kind == kindString {
-				add(r.head.args[1].text, false)
-			}
-		}
-		if l == m.level {
-			for _, r := range f.rules {
-				if r.fact("is tested with", 2) && r.head.args[0].kind == kindString && r.head.args[0].text == l && r.head.args[1].kind == kindString {
-					add(r.head.args[1].text, true)
-				}
-			}
-		}
-		groups[l] = group
-	}
-	for i := len(m.levels) - 1; i >= 0; i-- {
-		m.files = append(m.files, groups[m.levels[i]]...)
-	}
-	owner := map[string]string{}
-	for _, f := range m.files {
-		if o, ok := owner[f.name]; ok {
-			m.problem(fmt.Sprintf("two loaded files are named %s, in %s and in %s", f.name, o, f.level))
-		}
-		owner[f.name] = f.level
-	}
-	if levelFiles[m.level] == nil {
+func (k *knowledge) add(a atom) {
+	key := a.line()
+	if _, ok := k.facts[key]; ok {
 		return
 	}
-	for _, l := range m.levels[1:] {
-		if levelFiles[l] != nil && m.checkProven(l) {
-			m.proven[l] = true
-		}
-	}
-	for _, f := range m.files {
-		f.certified = m.proven[f.level]
-		if f.kind != "plain" {
-			continue
-		}
-		for _, r := range f.rules {
-			if f.certified && len(r.conds) == 0 && privateKeys[r.head.key()] {
-				continue
-			}
-			r.index = len(m.rules)
-			m.rules = append(m.rules, r)
-		}
-	}
-	for _, f := range m.files {
-		if f.kind == "rows" {
-			m.loadRows(f)
-		}
-	}
+	k.facts[key] = a
+	k.byPredicate[a.predicate()] = append(k.byPredicate[a.predicate()], a)
 }
 
-func (m *machine) locate(level, name string) string {
-	candidates := []string{filepath.Join(m.root, level, name)}
-	for _, l := range m.levels {
-		candidates = append(candidates, filepath.Join(m.root, l, name))
+func (k *knowledge) has(a atom) bool {
+	_, ok := k.facts[a.line()]
+	return ok
+}
+
+func sortAtoms(atoms []atom) []atom {
+	sorted := append([]atom{}, atoms...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].line() < sorted[j].line() })
+	return sorted
+}
+
+func (k *knowledge) all(name string, arity int) []atom {
+	return sortAtoms(k.byPredicate[predicate{name, arity}])
+}
+
+func (k *knowledge) lines() []string {
+	lines := make([]string, 0, len(k.facts))
+	for line := range k.facts {
+		lines = append(lines, line)
 	}
-	for _, c := range candidates {
-		if exists(c) {
-			return c
+	sort.Strings(lines)
+	return lines
+}
+
+type factSource func(name string, arity int) []atom
+
+func valueOf(facts factSource, name, subject string) string {
+	for _, a := range facts(name, 2) {
+		if a.args[0].plain() == subject {
+			return a.args[1].plain()
 		}
 	}
 	return ""
 }
 
-func (m *machine) checkProven(level string) bool {
-	path := filepath.Join(m.root, level+".db")
-	if !exists(path) {
+type loadedFile struct {
+	name  string
+	level string
+	rules []*rule
+}
+
+type session struct {
+	root       string
+	level      string
+	levelDir   string
+	change     bool
+	files      []*loadedFile
+	loaded     []string
+	tested     []string
+	rules      []*rule
+	observed   []atom
+	origins    map[string]string
+	problems   []string
+	problemSet map[string]bool
+	called     map[string]bool
+	programs   map[bool]*analysis.ProgramInfo
+	mutex      sync.Mutex
+}
+
+func newSession(arguments []string) (*session, error) {
+	directory, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	return &session{
+		root:       filepath.Dir(directory),
+		level:      filepath.Base(directory),
+		levelDir:   directory,
+		change:     len(arguments) > 0 && arguments[0] == changeArgument,
+		origins:    map[string]string{},
+		problemSet: map[string]bool{},
+		called:     map[string]bool{},
+		programs:   map[bool]*analysis.ProgramInfo{},
+	}, nil
+}
+
+func (s *session) problem(text string) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	if !s.problemSet[text] {
+		s.problemSet[text] = true
+		s.problems = append(s.problems, text)
+	}
+}
+
+func (s *session) observe(a atom, origin string) {
+	key := a.line()
+	if _, ok := s.origins[key]; ok {
+		return
+	}
+	s.origins[key] = origin
+	s.observed = append(s.observed, a)
+}
+
+func (s *session) path(name string) string {
+	return filepath.Join(s.root, filepath.FromSlash(name))
+}
+
+func fileName(name string) (string, bool) {
+	clean := path.Clean(name)
+	if name == "" || path.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", false
+	}
+	return clean, true
+}
+
+func levelOf(name string) string {
+	if i := strings.IndexByte(name, '/'); i >= 0 {
+		return name[:i]
+	}
+	return ""
+}
+
+func (s *session) stated(name string, arity int) []atom {
+	var found []atom
+	for _, f := range s.files {
+		for _, r := range f.rules {
+			if len(r.conditions) > 0 || r.head.name != name || len(r.head.args) != arity {
+				continue
+			}
+			ground := true
+			for _, t := range r.head.args {
+				if t.kind == blankTerm {
+					ground = false
+				}
+			}
+			if ground {
+				found = append(found, r.head)
+			}
+		}
+	}
+	return found
+}
+
+func (s *session) addPlain(name, level string, content []byte) {
+	rules, problems := parsePlain(name, string(content))
+	for _, p := range problems {
+		s.problem(p)
+	}
+	s.files = append(s.files, &loadedFile{name: name, level: level, rules: rules})
+}
+
+func (s *session) addRows(name string, content []byte) {
+	reader := csv.NewReader(bytes.NewReader(content))
+	reader.FieldsPerRecord = -1
+	header, err := reader.Read()
+	if err == io.EOF {
+		return
+	}
+	if err != nil {
+		s.problem(fmt.Sprintf("%s cannot be read as rows: %v", name, err))
+		return
+	}
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			return
+		}
+		if err != nil {
+			s.problem(fmt.Sprintf("%s cannot be read as rows: %v", name, err))
+			return
+		}
+		number, _ := reader.FieldPos(0)
+		row := textOf(fmt.Sprintf("%s:%d", name, number))
+		s.observe(atom{name: "is a row of", args: []term{row, textOf(name)}}, engineFile)
+		s.observe(atom{name: "is on line", args: []term{row, numberOf(int64(number))}}, engineFile)
+		for i, cell := range record {
+			if i < len(header) {
+				s.observe(atom{name: "has the cell", args: []term{row, textOf(header[i]), plainValue(cell)}}, engineFile)
+			}
+		}
+	}
+}
+
+func (s *session) kindOf(name string) string {
+	kind, longest := "", -1
+	for _, a := range s.stated("means", 2) {
+		ending := a.args[0].plain()
+		if strings.HasSuffix(name, ending) && len(ending) > longest {
+			kind, longest = a.args[1].plain(), len(ending)
+		}
+	}
+	return kind
+}
+
+func (s *session) loadByKind(name string) {
+	content, err := os.ReadFile(s.path(name))
+	if err != nil {
+		return
+	}
+	kind := s.kindOf(name)
+	switch valueOf(s.stated, "is loaded as", kind) {
+	case plainLoader:
+		s.addPlain(name, levelOf(name), content)
+	case rowsLoader:
+		s.addRows(name, content)
+	default:
+		s.problem(fmt.Sprintf("%s cannot be loaded because nothing says how %s is loaded", name, kind))
+	}
+}
+
+func (s *session) loadLevel(level string, seen map[string]bool) {
+	if level == "" || strings.ContainsAny(level, `/\`) || level == "." || level == ".." {
+		return
+	}
+	for _, base := range []string{"human.plain", "agent.plain"} {
+		name := level + "/" + base
+		if seen[name] {
+			continue
+		}
+		content, err := os.ReadFile(s.path(name))
+		if err != nil {
+			continue
+		}
+		seen[name] = true
+		s.loaded = append(s.loaded, name)
+		s.addPlain(name, level, content)
+	}
+}
+
+func (s *session) load() {
+	seen := map[string]bool{}
+	levels := map[string]bool{s.level: true}
+	order := []string{s.level}
+	s.loadLevel(s.level, seen)
+	for grown := true; grown; {
+		grown = false
+		for _, a := range s.stated("builds on", 2) {
+			if !levels[a.args[0].plain()] || levels[a.args[1].plain()] {
+				continue
+			}
+			other := a.args[1].plain()
+			levels[other] = true
+			order = append(order, other)
+			s.loadLevel(other, seen)
+			grown = true
+		}
+	}
+	for _, a := range s.stated("loads", 2) {
+		if a.args[0].plain() != engineFile {
+			continue
+		}
+		name, ok := fileName(a.args[1].plain())
+		if !ok {
+			s.problem(fmt.Sprintf("%s is not a file name", a.args[1].plain()))
+			continue
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		if _, err := os.Stat(s.path(name)); err != nil {
+			continue
+		}
+		s.loaded = append(s.loaded, name)
+		s.loadByKind(name)
+	}
+	proven := map[string]bool{}
+	for _, level := range order[1:] {
+		if s.storeProves(level) {
+			proven[level] = true
+			s.observe(atom{name: "proven", args: []term{textOf(level)}}, engineFile)
+		}
+	}
+	private := map[predicate]bool{}
+	for _, a := range s.stated("private to its level", 1) {
+		if p, err := parsePattern(a.args[0].plain()); err == nil {
+			private[p.predicate()] = true
+		} else {
+			s.problem(err.Error())
+		}
+	}
+	for _, f := range s.files {
+		if !proven[levelOf(f.name)] {
+			continue
+		}
+		s.observe(atom{name: "certified", args: []term{textOf(f.name)}}, engineFile)
+		var kept []*rule
+		for _, r := range f.rules {
+			if len(r.conditions) == 0 && private[r.head.predicate()] {
+				continue
+			}
+			kept = append(kept, r)
+		}
+		f.rules = kept
+	}
+	for _, a := range s.stated("is tested with", 2) {
+		if a.args[0].plain() != s.level {
+			continue
+		}
+		name, ok := fileName(a.args[1].plain())
+		if !ok || levelOf(name) != s.level || seen[name] {
+			continue
+		}
+		if _, err := os.Stat(s.path(name)); err != nil {
+			continue
+		}
+		seen[name] = true
+		s.tested = append(s.tested, name)
+		s.loadByKind(name)
+	}
+	for _, f := range s.files {
+		s.rules = append(s.rules, f.rules...)
+	}
+}
+
+func certificateTable(facts factSource) (table, bool) {
+	tables, problems := schema(facts)
+	if len(problems) > 0 {
+		return table{}, false
+	}
+	for _, t := range tables {
+		if t.source == certificateRows {
+			return t, true
+		}
+	}
+	return table{}, false
+}
+
+func (s *session) storeProves(level string) bool {
+	target := filepath.Join(s.root, level+".db")
+	if _, err := os.Stat(target); err != nil {
 		return false
 	}
-	db, err := sql.Open("sqlite", path)
+	certificate, ok := certificateTable(s.stated)
+	if !ok {
+		return false
+	}
+	columns := map[string]string{}
+	for _, c := range certificate.columns {
+		columns[c.content] = c.name
+	}
+	part, subject, value := columns[partContent], columns[subjectContent], columns[valueContent]
+	if part == "" || subject == "" || value == "" {
+		return false
+	}
+	db, err := sql.Open("sqlite", target)
 	if err != nil {
 		return false
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT part, subject, value FROM certificate`)
+	rows, err := db.Query(fmt.Sprintf(`SELECT "%s", "%s", "%s" FROM "%s"`, part, subject, value, certificate.name))
 	if err != nil {
 		return false
 	}
 	defer rows.Close()
-	hasName, hasAnswer, hashes := false, false, 0
+	answered := false
 	for rows.Next() {
-		var part, subject, val sql.NullString
-		if err := rows.Scan(&part, &subject, &val); err != nil {
+		var named, file, held string
+		if err := rows.Scan(&named, &file, &held); err != nil {
 			return false
 		}
-		switch part.String {
-		case partLevel:
-			hasName = hasName || val.String == level
-		case partAnswer:
-			hasAnswer = hasAnswer || val.String == "true"
-		case partHash:
-			hashes++
-			p := m.locate(level, subject.String)
-			if p == "" {
+		if named == answerPart {
+			if held != provenAnswer {
 				return false
 			}
-			data, err := os.ReadFile(p)
-			if err != nil || shaHex(data) != val.String {
-				return false
-			}
+			answered = true
+		}
+		if file != "" && fileHash(s.path(file)) != held {
+			return false
 		}
 	}
-	return rows.Err() == nil && hasName && hasAnswer && hashes > 0
+	return answered && rows.Err() == nil
 }
 
-func plainConstant(text string) ast.Constant {
-	if numberRe.MatchString(text) {
-		if n, err := strconv.ParseInt(text, 10, 64); err == nil {
-			return ast.Number(n)
-		}
-	}
-	return ast.String(text)
-}
-
-func (m *machine) loadRows(f *loadedFile) {
-	lines := fileLines(f.data)
-	if len(lines) == 0 {
-		return
-	}
-	readCells := func(l string) ([]string, error) {
-		r := csv.NewReader(strings.NewReader(strings.TrimSuffix(l, "\r")))
-		r.FieldsPerRecord = -1
-		r.LazyQuotes = true
-		return r.Read()
-	}
-	header, err := readCells(lines[0])
-	if err != nil {
-		m.problem(fmt.Sprintf("%s:1 cannot be read as the names of the columns", f.name))
-		return
-	}
-	for i := 1; i < len(lines); i++ {
-		if strings.TrimSpace(lines[i]) == "" {
-			continue
-		}
-		where := fmt.Sprintf("%s:%d", f.name, i+1)
-		cells, err := readCells(lines[i])
-		if err != nil || len(cells) != len(header) {
-			m.problem(where + " does not have one cell for every column")
-			continue
-		}
-		m.observe("is a row of", ast.String(where), ast.String(f.name))
-		m.observe("is on line", ast.String(where), ast.Number(int64(i+1)))
-		for j, column := range header {
-			m.observe("has the cell", ast.String(where), ast.String(column), plainConstant(cells[j]))
-		}
-	}
-}
-
-func newAtom(phrase string, args ...ast.Constant) ast.Atom {
-	terms := make([]ast.BaseTerm, len(args))
-	for i, a := range args {
-		terms[i] = a
-	}
-	return ast.Atom{Predicate: ast.PredicateSym{Symbol: mangleName(phrase), Arity: len(args)}, Args: terms}
-}
-
-func (m *machine) observe(phrase string, args ...ast.Constant) {
-	a := newAtom(phrase, args...)
-	m.observed = append(m.observed, a)
-	m.origins[lineOf(a)] = engineFile
-}
-
-func valueOf(c ast.Constant) value {
-	switch c.Type {
-	case ast.NumberType:
-		n, _ := c.NumberValue()
-		return value{kind: kindNumber, num: n}
-	case ast.StringType:
-		s, _ := c.StringValue()
-		return str(s)
-	}
-	return str(c.String())
-}
-
-func constOf(v value) ast.Constant {
-	if v.kind == kindNumber {
-		return ast.Number(v.num)
-	}
-	return ast.String(v.text)
-}
-
-func textOf(c ast.Constant) string {
-	v := valueOf(c)
-	if v.kind == kindNumber {
-		return strconv.FormatInt(v.num, 10)
-	}
-	return v.text
-}
-
-func constants(a ast.Atom) []ast.Constant {
-	out := make([]ast.Constant, len(a.Args))
-	for i, t := range a.Args {
-		out[i], _ = t.(ast.Constant)
-	}
-	return out
-}
-
-func atomOf(a ast.Atom) atom {
-	cs := constants(a)
-	args := make([]value, len(cs))
-	for i, c := range cs {
-		args[i] = valueOf(c)
-	}
-	return atom{pred: phraseOf(a.Predicate.Symbol), args: args}
-}
-
-func lineOf(a ast.Atom) string {
-	return formatAtom(atomOf(a))
-}
-
-func symKey(sym ast.PredicateSym) string {
-	return key(phraseOf(sym.Symbol), sym.Arity)
-}
-
-func (m *machine) observeRules() {
-	if m.change != "" {
-		m.observe("this run is a change")
-	}
-	for _, l := range m.levels {
-		if m.proven[l] {
-			m.observe("proven", ast.String(l))
-		}
-	}
-	for _, f := range m.files {
-		if f.certified {
-			m.observe("certified", ast.String(f.name))
-		}
-	}
-	places := map[string]bool{}
-	for _, r := range m.rules {
+func (s *session) observeRules() {
+	positions := map[predicate]map[int]bool{}
+	arities := map[string]int{}
+	for _, r := range s.rules {
 		for _, a := range r.atoms() {
-			for i, v := range a.args {
-				if v.kind == kindBlank && v.text == "fact pattern" {
-					places[a.key()+"#"+strconv.Itoa(i)] = true
-				}
-			}
-		}
-	}
-	seen := map[string]bool{}
-	for _, r := range m.rules {
-		for _, a := range r.atoms() {
-			for i, v := range a.args {
-				if v.kind != kindString || !places[a.key()+"#"+strconv.Itoa(i)] || seen[v.text] {
-					continue
-				}
-				seen[v.text] = true
-				p, ok := parsePattern(v.text)
-				if !ok {
-					continue
-				}
-				m.observe("names", ast.String(v.text), ast.String(p.phrase))
-				for _, s := range p.slots {
-					m.observe("has the slot", ast.String(v.text), ast.String(s))
-				}
-				m.decls[mangleName(p.phrase)] = p.arity
-			}
-		}
-	}
-	for _, r := range m.rules {
-		name := ast.String(r.name)
-		m.observe("has the id", name, ast.String(sha16(r.text())))
-		m.observe("is in the file", name, ast.String(r.file))
-		m.observe("defines", name, ast.String(r.head.pred))
-		m.observe("has a rule for", ast.String(r.file), ast.String(r.head.pred))
-		for _, c := range r.conds {
-			m.observe("refers to", name, ast.String(c.atom.pred))
-		}
-		if r.head.key() == "breaks/2" && r.head.args[1].kind == kindString {
-			m.observe("lays down", name, ast.String(r.head.args[1].text))
-		}
-		if r.canonical() != r.text() {
-			m.observe("read back differently", name)
-		}
-		blanks := map[string]bool{}
-		for _, a := range r.atoms() {
-			for _, v := range a.args {
-				if v.kind == kindBlank && !blanks[v.text] {
-					blanks[v.text] = true
-					m.observe("has the blank", name, ast.String(v.text))
-				}
-			}
-		}
-	}
-}
-
-func hasBlank(a atom) bool {
-	for _, v := range a.args {
-		if v.kind == kindBlank {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *machine) meanings() []*rule {
-	var out []*rule
-	for _, r := range m.rules {
-		if r.fact("means in mangle", 2) && r.head.args[0].kind == kindString && r.head.args[1].kind == kindString {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
-func declArgs(arity int) string {
-	args := make([]string, arity)
-	for i := range args {
-		args[i] = "A" + strconv.Itoa(i)
-	}
-	return strings.Join(args, ", ")
-}
-
-func (m *machine) compile() {
-	for _, r := range m.meanings() {
-		a, err := parseAtom(r.head.args[0].text)
-		text := r.head.args[1].text
-		if err != nil || strings.HasSuffix(text, ".") || !hasBlank(a) {
-			continue
-		}
-		t := template{args: a.args, text: text}
-		for _, v := range a.args {
-			if v.kind != kindBlank {
-				t.constants++
-			}
-		}
-		m.templates[a.key()] = append(m.templates[a.key()], t)
-	}
-	for k := range m.templates {
-		ts := m.templates[k]
-		sort.SliceStable(ts, func(i, j int) bool { return ts[i].constants < ts[j].constants })
-	}
-	for _, r := range m.meanings() {
-		line, want := r.head.args[0].text, r.head.args[1].text
-		a, err := parseAtom(line)
-		if err != nil {
-			m.problem(fmt.Sprintf("%s cannot be read: %v", line, err))
-			continue
-		}
-		got := mangleAtom(a) + "."
-		if _, ok := m.templates[a.key()]; ok {
-			got, err = m.mangleCondition(condition{atom: a})
-			if err != nil {
-				m.problem(fmt.Sprintf("%s cannot be said in mangle: %v", line, err))
+			if _, ok := a.builtin(); ok {
 				continue
 			}
-		}
-		if got != want {
-			m.problem(fmt.Sprintf("%s means %s in mangle but engine.go says %s", line, want, got))
-		}
-	}
-	var b strings.Builder
-	names := make([]string, 0, len(m.decls))
-	for n := range m.decls {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		fmt.Fprintf(&b, "Decl %s(%s).\n", n, declArgs(m.decls[n]))
-	}
-	for _, r := range m.rules {
-		head := mangleAtom(r.head)
-		if len(r.conds) == 0 {
-			b.WriteString(head + ".\n")
-			continue
-		}
-		body := make([]string, 0, len(r.conds))
-		ok := true
-		for _, c := range r.conds {
-			s, err := m.mangleCondition(c)
-			if err != nil {
-				m.problem(fmt.Sprintf("%s cannot be said in mangle: %v", r.name, err))
-				ok = false
-				break
+			if arity, ok := arities[a.name]; ok && arity != len(a.args) {
+				s.problem(fmt.Sprintf("%s uses %s with %d blanks or values where it has %d elsewhere", r.name(), a.name, len(a.args), arity))
 			}
-			body = append(body, s)
+			arities[a.name] = len(a.args)
+			if mangleKeywords[mangleName(a.name)] {
+				s.problem(fmt.Sprintf("%s uses %s which mangle keeps for itself", r.name(), a.name))
+			}
+			for i, t := range a.args {
+				if t.kind == blankTerm && strings.HasSuffix(t.text, "fact pattern") {
+					if positions[a.predicate()] == nil {
+						positions[a.predicate()] = map[int]bool{}
+					}
+					positions[a.predicate()][i] = true
+				}
+			}
 		}
-		if !ok {
+	}
+	var patterns []string
+	seenPattern := map[string]bool{}
+	for _, r := range s.rules {
+		name := textOf(r.name())
+		for _, p := range ruleProblems(r) {
+			s.problem(p)
+		}
+		s.observe(atom{name: "has the id", args: []term{name, textOf(r.id())}}, engineFile)
+		s.observe(atom{name: "is in the file", args: []term{name, textOf(r.file)}}, engineFile)
+		s.observe(atom{name: "defines", args: []term{name, textOf(r.head.name)}}, engineFile)
+		s.observe(atom{name: "has a rule for", args: []term{textOf(r.file), textOf(r.head.name)}}, engineFile)
+		if r.head.name == "breaks" && len(r.head.args) == 2 && r.head.args[1].kind == textTerm {
+			s.observe(atom{name: "lays down", args: []term{name, r.head.args[1]}}, engineFile)
+		}
+		for _, c := range r.conditions {
+			if _, ok := c.atom.builtin(); !ok {
+				s.observe(atom{name: "refers to", args: []term{name, textOf(c.atom.name)}}, engineFile)
+			}
+		}
+		for _, blank := range ruleBlanks(r, nil) {
+			s.observe(atom{name: "has the blank", args: []term{name, textOf(blank)}}, engineFile)
+		}
+		if r.readBack() != r.text() {
+			s.observe(atom{name: "read back differently", args: []term{name}}, engineFile)
+		}
+		for _, a := range r.atoms() {
+			for i, t := range a.args {
+				if positions[a.predicate()][i] && t.kind == textTerm && !seenPattern[t.text] {
+					seenPattern[t.text] = true
+					patterns = append(patterns, t.text)
+				}
+			}
+		}
+	}
+	for _, text := range patterns {
+		p, err := parsePattern(text)
+		if err != nil {
+			s.problem(err.Error())
 			continue
 		}
-		r.body = strings.Join(body, ", ")
-		b.WriteString(head + " :- " + r.body + ".\n")
+		pattern := textOf(text)
+		s.observe(atom{name: "names", args: []term{pattern, textOf(p.name)}}, engineFile)
+		for _, t := range p.args {
+			if t.kind == blankTerm {
+				s.observe(atom{name: "has the slot", args: []term{pattern, textOf(t.text)}}, engineFile)
+			}
+		}
 	}
-	m.program = b.String()
+	if s.change {
+		s.observe(atom{name: "this run is a change"}, engineFile)
+	}
 }
 
-func analyze(program string) (info *analysis.ProgramInfo, err error) {
-	defer func() {
-		if p := recover(); p != nil {
-			err = fmt.Errorf("%v", p)
+func declaration(p predicate) string {
+	variables := make([]string, p.arity)
+	for i := range variables {
+		variables[i] = fmt.Sprintf("A%d", i)
+	}
+	return "Decl " + mangleName(p.name) + "(" + strings.Join(variables, ", ") + ")."
+}
+
+func (s *session) program(derive bool) (*analysis.ProgramInfo, error) {
+	if info, ok := s.programs[derive]; ok {
+		return info, nil
+	}
+	defined := map[predicate]bool{}
+	referenced := map[predicate]bool{}
+	for _, r := range s.rules {
+		defined[r.head.predicate()] = true
+		for _, c := range r.conditions {
+			if _, ok := c.atom.builtin(); !ok {
+				referenced[c.atom.predicate()] = true
+			}
 		}
-	}()
-	unit, err := parse.Unit(strings.NewReader(program))
+	}
+	var undefined []string
+	for p := range referenced {
+		if !defined[p] {
+			undefined = append(undefined, declaration(p))
+		}
+	}
+	sort.Strings(undefined)
+	var text strings.Builder
+	for _, d := range undefined {
+		text.WriteString(d + "\n")
+	}
+	for _, r := range s.rules {
+		text.WriteString(mangleRule(r) + "\n")
+	}
+	if derive {
+		for i, r := range s.rules {
+			if len(r.conditions) > 0 {
+				text.WriteString(derivationRule(i, r) + "\n")
+			}
+		}
+	}
+	unit, err := parse.Unit(strings.NewReader(text.String()))
 	if err != nil {
 		return nil, err
 	}
-	return analysis.AnalyzeOneUnit(unit, nil)
-}
-
-func evaluate(info *analysis.ProgramInfo, store factstore.FactStore) (err error) {
-	defer func() {
-		if p := recover(); p != nil {
-			err = fmt.Errorf("%v", p)
-		}
-	}()
-	return engine.EvalProgram(info, store)
-}
-
-func (m *machine) evaluate() error {
-	info, err := analyze(m.program)
+	info, err := analysis.AnalyzeOneUnit(unit, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	store := factstore.NewIndexedInMemoryStore()
-	for _, a := range m.observed {
-		store.Add(a)
-	}
-	for _, a := range m.toolFacts {
-		store.Add(a)
-	}
-	if err := evaluate(info, store); err != nil {
-		return err
-	}
-	m.info = info
-	m.store = store
-	return nil
+	s.programs[derive] = info
+	return info, nil
 }
 
-func (m *machine) facts(phrase string, arity int) [][]ast.Constant {
-	var out [][]ast.Constant
-	sym := ast.PredicateSym{Symbol: mangleName(phrase), Arity: arity}
-	m.store.GetFacts(ast.NewQuery(sym), func(a ast.Atom) error {
-		out = append(out, constants(a))
-		return nil
-	})
-	return out
-}
-
-func (m *machine) pendingCalls() []call {
-	var out []call
-	for _, row := range m.facts("calls", 3) {
-		c := call{command: row[0], tool: textOf(row[1]), input: textOf(row[2])}
-		c.key = row[0].String() + "\x00" + row[1].String() + "\x00" + row[2].String()
-		if !m.ran[c.key] {
-			out = append(out, c)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].key < out[j].key })
-	return out
-}
-
-func (m *machine) addToolFact(command ast.Constant, field string, v ast.Constant) {
-	a := newAtom("returned", command, ast.String(field), v)
-	m.toolFacts = append(m.toolFacts, a)
-	m.origins[lineOf(a)] = toolsFile
-}
-
-func (m *machine) answer() string {
-	if len(m.facts("a problem", 1)) > 0 {
-		return "broken"
-	}
-	answers := map[string]bool{}
-	for _, row := range m.facts("conforms", 2) {
-		if textOf(row[0]) == "the folder" {
-			answers[textOf(row[1])] = true
-		}
-	}
-	if len(answers) != 1 {
-		return "broken"
-	}
-	for a := range answers {
-		return a
-	}
-	return "broken"
-}
-
-func (m *machine) exitCode(answer string) int {
-	for _, row := range m.facts("exits with", 2) {
-		if textOf(row[0]) == answer && row[1].Type == ast.NumberType {
-			n, _ := row[1].NumberValue()
-			return int(n)
-		}
-	}
-	return 2
-}
-
-func (m *machine) knowledgeNames() []string {
-	var out []string
-	for _, row := range m.facts("prints", 2) {
-		if textOf(row[0]) == engineFile {
-			out = append(out, textOf(row[1]))
-		}
-	}
-	return out
-}
-
-func (m *machine) patternKeys(phrase string, knowledge map[string]bool) map[string]bool {
-	out := map[string]bool{}
-	for _, row := range m.facts(phrase, 2) {
-		if !knowledge[textOf(row[0])] {
-			continue
-		}
-		if p, ok := parsePattern(textOf(row[1])); ok {
-			out[p.key()] = true
-		}
-	}
-	return out
-}
-
-func (m *machine) printed() map[string]bool {
-	out := map[string]bool{}
-	for _, k := range m.knowledgeNames() {
-		out[k] = true
-	}
-	return out
-}
-
-func (m *machine) publishedWhen(answer string) bool {
-	knowledge := m.printed()
-	for _, row := range m.facts("is published only when", 2) {
-		if knowledge[textOf(row[0])] && textOf(row[1]) == answer {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *machine) derive(all bool) error {
-	m.reasonKeys = m.patternKeys("gives reasons for", m.printed())
-	var b strings.Builder
-	var syms []string
-	for sym := range m.info.Decls {
-		if nameRe.MatchString(sym.Symbol) && !strings.HasPrefix(sym.Symbol, auxPrefix) {
-			syms = append(syms, fmt.Sprintf("Decl %s(%s).\n", sym.Symbol, declArgs(sym.Arity)))
-		}
-	}
-	sort.Strings(syms)
-	for _, s := range syms {
-		b.WriteString(s)
-	}
-	type aux struct {
-		rule *rule
-		vars []string
-	}
-	var auxes []aux
-	for _, r := range m.rules {
-		wanted := all || m.reasonKeys[r.head.key()]
-		if !wanted {
-			continue
-		}
-		if len(r.conds) == 0 {
-			a := newAtom(r.head.pred, constantsOf(r.head.args)...)
-			m.derivations = append(m.derivations, derivation{fact: lineOf(a), atom: a, rule: r})
-			continue
-		}
-		if r.body == "" {
-			continue
-		}
-		var vars []string
-		seen := map[string]bool{}
-		for _, c := range r.conds {
-			for _, v := range c.atom.args {
-				if v.kind == kindBlank && !seen[varName(v.text)] {
-					seen[varName(v.text)] = true
-					vars = append(vars, varName(v.text))
-				}
-			}
-		}
-		fmt.Fprintf(&b, "%s%d(%s) :- %s.\n", auxPrefix, r.index, strings.Join(vars, ", "), r.body)
-		auxes = append(auxes, aux{rule: r, vars: vars})
-	}
-	if len(auxes) == 0 {
-		return nil
-	}
-	info, err := analyze(b.String())
+func (s *session) evaluate(extra []atom, derive bool) (*knowledge, error) {
+	info, err := s.program(derive)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if err := evaluate(info, m.store); err != nil {
-		return err
+	facts := append(append([]atom{}, s.observed...), extra...)
+	store := factstore.NewSimpleInMemoryStore()
+	for _, a := range facts {
+		store.Add(toMangle(a))
 	}
-	for _, x := range auxes {
-		sym := ast.PredicateSym{Symbol: auxPrefix + strconv.Itoa(x.rule.index), Arity: len(x.vars)}
-		var found []derivation
-		m.store.GetFacts(ast.NewQuery(sym), func(a ast.Atom) error {
-			binding := map[string]value{}
-			for i, c := range constants(a) {
-				binding[x.vars[i]] = valueOf(c)
+	if err := engine.EvalProgram(info, store); err != nil {
+		return nil, err
+	}
+	predicates := map[predicate]bool{}
+	for _, r := range s.rules {
+		for _, a := range r.atoms() {
+			if _, ok := a.builtin(); !ok {
+				predicates[a.predicate()] = true
 			}
-			fill := func(at atom) atom {
-				out := atom{pred: at.pred, args: make([]value, len(at.args))}
-				for i, v := range at.args {
-					if v.kind == kindBlank {
-						out.args[i] = binding[varName(v.text)]
-					} else {
-						out.args[i] = v
-					}
-				}
-				return out
+		}
+	}
+	for _, a := range facts {
+		predicates[a.predicate()] = true
+	}
+	k := newKnowledge()
+	for p := range predicates {
+		query := ast.NewQuery(ast.PredicateSym{Symbol: mangleName(p.name), Arity: p.arity})
+		store.GetFacts(query, func(f ast.Atom) error {
+			args := make([]term, len(f.Args))
+			for i, t := range f.Args {
+				args[i] = fromMangle(t)
 			}
-			head := fill(x.rule.head)
-			d := derivation{atom: newAtom(head.pred, constantsOf(head.args)...), rule: x.rule}
-			d.fact = lineOf(d.atom)
-			for _, c := range x.rule.conds {
-				reason := formatAtom(fill(c.atom))
-				if c.negated {
-					reason = "not " + reason
-				}
-				d.reasons = append(d.reasons, reason)
-			}
-			found = append(found, d)
+			k.add(atom{name: p.name, args: args})
 			return nil
 		})
-		sort.Slice(found, func(i, j int) bool {
-			return strings.Join(found[i].reasons, "\n") < strings.Join(found[j].reasons, "\n")
-		})
-		m.derivations = append(m.derivations, found...)
 	}
-	return nil
+	if derive {
+		for i, r := range s.rules {
+			k.derivations = append(k.derivations, derivationsOf(store, i, r)...)
+		}
+	}
+	return k, nil
 }
 
-func constantsOf(vs []value) []ast.Constant {
-	out := make([]ast.Constant, len(vs))
-	for i, v := range vs {
-		out[i] = constOf(v)
+func derivationsOf(store factstore.FactStore, index int, r *rule) []derivation {
+	if len(r.conditions) == 0 {
+		return []derivation{{fact: r.head, rule: r}}
 	}
-	return out
+	names := ruleBlanks(r, hiddenBlanks(r))
+	var found []derivation
+	query := ast.NewQuery(ast.PredicateSym{Symbol: derivationName(index), Arity: len(names)})
+	store.GetFacts(query, func(f ast.Atom) error {
+		binding := map[string]term{}
+		for i, name := range names {
+			binding[name] = fromMangle(f.Args[i])
+		}
+		d := derivation{fact: substitute(r.head, binding), rule: r}
+		for _, c := range r.conditions {
+			d.reasons = append(d.reasons, condition{c.negated, substitute(c.atom, binding)})
+		}
+		found = append(found, d)
+		return nil
+	})
+	sort.Slice(found, func(i, j int) bool {
+		return strings.Join(found[i].lines(), "\n") < strings.Join(found[j].lines(), "\n")
+	})
+	return found
 }
 
-func (m *machine) giveReasons() {
-	for _, d := range m.derivations {
-		if !m.reasonKeys[symKey(d.atom.Predicate)] {
+func (s *session) settle(k *knowledge) []atom {
+	var settled []atom
+	check := func(verb, outcome string, wanted bool) {
+		for _, a := range k.all(verb, 2) {
+			stated := a.args[1]
+			f, err := parseFact(stated.plain())
+			if err != nil {
+				s.problem(fmt.Sprintf("%s cannot be read as a fact: %v", stated.plain(), err))
+				continue
+			}
+			if k.has(f) == wanted {
+				settled = append(settled, atom{name: outcome, args: []term{stated}})
+			}
+		}
+	}
+	check("expects", "missing", false)
+	check("rules out", "present", true)
+	return settled
+}
+
+func (s *session) reach() (*knowledge, error) {
+	for {
+		first, err := s.evaluate(nil, false)
+		if err != nil {
+			return nil, err
+		}
+		if calls := s.pendingCalls(first); len(calls) > 0 {
+			s.runTools(first, calls)
+			continue
+		}
+		settled := s.settle(first)
+		final, err := s.evaluate(settled, true)
+		if err != nil {
+			return nil, err
+		}
+		if calls := s.pendingCalls(final); len(calls) > 0 {
+			s.runTools(final, calls)
+			continue
+		}
+		for _, a := range settled {
+			s.observe(a, engineFile)
+		}
+		return final, nil
+	}
+}
+
+func (s *session) patternPredicates(k *knowledge, verb string) map[predicate]bool {
+	found := map[predicate]bool{}
+	for _, a := range k.all(verb, 2) {
+		if a.args[0].plain() != theKnowledge {
+			continue
+		}
+		p, err := parsePattern(a.args[1].plain())
+		if err != nil {
+			s.problem(err.Error())
+			continue
+		}
+		found[p.predicate()] = true
+	}
+	return found
+}
+
+func (s *session) explain(k *knowledge) {
+	reasoned := s.patternPredicates(k, "gives reasons for")
+	for _, d := range k.derivations {
+		if !reasoned[d.fact.predicate()] {
 			continue
 		}
 		for _, reason := range d.reasons {
-			a := newAtom("holds because", ast.String(d.fact), ast.String(reason))
-			m.store.Add(a)
-			m.origins[lineOf(a)] = engineFile
+			a := atom{name: "holds because", args: []term{textOf(d.fact.line()), textOf(reason.line())}}
+			s.observe(a, engineFile)
+			k.add(a)
 		}
 	}
 }
 
-func (m *machine) allFacts(fn func(ast.Atom)) {
-	syms := m.store.ListPredicates()
-	sort.Slice(syms, func(i, j int) bool { return symKey(syms[i]) < symKey(syms[j]) })
-	for _, sym := range syms {
-		if strings.HasPrefix(sym.Symbol, auxPrefix) {
-			continue
-		}
-		m.store.GetFacts(ast.NewQuery(sym), func(a ast.Atom) error {
-			fn(a)
-			return nil
-		})
-	}
-}
-
-func (m *machine) print() {
-	knowledge := m.printed()
-	shown := m.patternKeys("shows", knowledge)
-	becauseKey := key("holds because", 2)
-	conformsKey := key("conforms", 2)
-	reasons := map[string][]string{}
-	for _, d := range m.derivations {
-		if m.reasonKeys[symKey(d.atom.Predicate)] {
-			reasons[d.fact] = append(reasons[d.fact], d.reasons...)
+func (s *session) check(k *knowledge) {
+	for _, a := range k.all("means in mangle", 2) {
+		said, meant := a.args[0].plain(), a.args[1].plain()
+		read, err := mangleLine(said)
+		if err != nil {
+			s.problem(fmt.Sprintf("%s cannot be read: %v", said, err))
+		} else if read != meant {
+			s.problem(fmt.Sprintf("%s means %s in mangle but engine.go reads it as %s", said, meant, read))
 		}
 	}
-	var plain, reasoned, last []string
-	m.allFacts(func(a ast.Atom) {
-		k := symKey(a.Predicate)
-		switch {
-		case k == becauseKey:
-			return
-		case m.reasonKeys[k]:
-			reasoned = append(reasoned, lineOf(a))
-		case shown[k] && k == conformsKey:
-			last = append(last, lineOf(a))
-		case shown[k]:
-			plain = append(plain, lineOf(a))
-		}
-	})
-	sort.Strings(plain)
-	sort.Strings(reasoned)
-	sort.Strings(last)
-	written := map[string]bool{}
-	var out strings.Builder
-	write := func(line string) {
-		if !written[line] {
-			written[line] = true
-			out.WriteString(line + "\n")
+	for _, a := range k.all("is computed as", 2) {
+		if computations[a.args[0].plain()] != a.args[1].plain() {
+			s.problem(fmt.Sprintf("engine.go does not compute %s as %s", a.args[0].plain(), a.args[1].plain()))
 		}
 	}
-	for _, l := range plain {
-		write(l)
-	}
-	for _, l := range reasoned {
-		write(l)
-		rs := append([]string(nil), reasons[l]...)
-		sort.Strings(rs)
-		for _, r := range rs {
-			write(formatAtom(atom{pred: "holds because", args: []value{str(l), str(r)}}))
-		}
-	}
-	for _, l := range last {
-		write(l)
-	}
-	os.Stdout.WriteString(out.String())
-}
-
-func (m *machine) fail() int {
-	var out strings.Builder
-	for _, p := range m.problems {
-		out.WriteString(formatAtom(atom{pred: "a problem", args: []value{str(p)}}) + "\n")
-	}
-	os.Stdout.WriteString(out.String())
-	for _, r := range m.rules {
-		if r.fact("exits with", 2) && r.head.args[0].kind == kindString && r.head.args[0].text == "broken" && r.head.args[1].kind == kindNumber {
-			return int(r.head.args[1].num)
-		}
-	}
-	for _, f := range m.files {
-		for _, r := range f.rules {
-			if r.fact("exits with", 2) && r.head.args[0].kind == kindString && r.head.args[0].text == "broken" && r.head.args[1].kind == kindNumber {
-				return int(r.head.args[1].num)
+	for _, p := range describedPredicates {
+		for _, a := range k.all(p.name, p.arity) {
+			if !selfDescriptions[a.line()] {
+				s.problem(fmt.Sprintf("engine.go does not do what %s says", a.line()))
 			}
+		}
+	}
+	for _, a := range k.all("is loaded as", 2) {
+		if way := a.args[1].plain(); way != plainLoader && way != rowsLoader {
+			s.problem(fmt.Sprintf("engine.go cannot load %s as %s", a.args[0].plain(), way))
+		}
+	}
+	for _, a := range k.all("holds", 2) {
+		if a.args[0].plain() == theCertificate && !certificateParts[a.args[1].plain()] {
+			s.problem(fmt.Sprintf("engine.go cannot put %s in the certificate", a.args[1].plain()))
+		}
+	}
+	_, problems := schema(k.all)
+	for _, p := range problems {
+		s.problem(p)
+	}
+}
+
+func (s *session) answer(k *knowledge) string {
+	var answers []string
+	for _, a := range k.all("conforms", 2) {
+		if a.args[0].plain() == theFolder {
+			answers = append(answers, a.args[1].plain())
+		}
+	}
+	if len(answers) != 1 {
+		s.problem(fmt.Sprintf("the folder has %d answers where it must have one", len(answers)))
+	}
+	if len(s.problems) > 0 {
+		return brokenAnswer
+	}
+	return answers[0]
+}
+
+func exitCode(facts []atom, answer string) int {
+	for _, a := range facts {
+		if a.args[0].plain() == answer && a.args[1].kind == numberTerm {
+			return int(a.args[1].number)
 		}
 	}
 	return 2
 }
 
-type storeTarget struct {
-	name string
-	path string
+func problemFact(text string) atom { return atom{name: "a problem", args: []term{textOf(text)}} }
+
+func (s *session) stop() int {
+	out := bufio.NewWriter(os.Stdout)
+	for _, p := range s.problems {
+		fmt.Fprintln(out, problemFact(p).line())
+	}
+	out.Flush()
+	s.withdraw()
+	return exitCode(s.stated("exits with", 2), brokenAnswer)
 }
 
-func (m *machine) stores() []storeTarget {
-	knowledge := m.printed()
-	var out []storeTarget
-	for _, row := range m.facts("is published to", 2) {
-		if !knowledge[textOf(row[0])] {
+func (s *session) print(k *knowledge) {
+	shown := s.patternPredicates(k, "shows")
+	var lines, verdicts []string
+	for _, line := range k.lines() {
+		a := k.facts[line]
+		if !shown[a.predicate()] {
 			continue
 		}
-		s := textOf(row[1])
-		for _, p := range m.facts("is the sqlite file", 2) {
-			if textOf(p[0]) != s {
-				continue
-			}
-			path := filepath.Join(m.root, textOf(p[1]))
-			if textOf(p[1]) == levelStore {
-				path = filepath.Join(m.root, m.level+".db")
-			}
-			out = append(out, storeTarget{name: s, path: path})
+		if a.name == "conforms" {
+			verdicts = append(verdicts, line)
+		} else {
+			lines = append(lines, line)
 		}
 	}
-	return out
-}
-
-func (m *machine) unpublish() {
-	for _, s := range m.stores() {
-		os.Remove(s.path)
+	out := bufio.NewWriter(os.Stdout)
+	for _, line := range append(lines, verdicts...) {
+		fmt.Fprintln(out, line)
 	}
+	out.Flush()
 }
 
-func (m *machine) tableRows(table, answer string) []map[string]any {
-	var out []map[string]any
-	switch table {
-	case "rules":
-		for _, r := range m.rules {
-			out = append(out, map[string]any{"id": sha16(r.text()), "name": r.name, "file": r.file, "line": r.line, "text": r.text()})
+type column struct {
+	number  int64
+	name    string
+	content string
+}
+
+type table struct {
+	name    string
+	source  string
+	columns []column
+}
+
+func schema(facts factSource) ([]table, []string) {
+	var problems []string
+	store := valueOf(facts, "is published to", theKnowledge)
+	var tables []table
+	for _, a := range facts("has the table", 2) {
+		if a.args[0].plain() != store {
+			continue
 		}
-	case "facts":
-		seen := map[string]bool{}
-		m.allFacts(func(a ast.Atom) {
-			line := lineOf(a)
-			id := sha16(line)
-			if seen[id] {
-				return
-			}
-			seen[id] = true
-			origin := m.origins[line]
-			if origin == "" {
-				origin = derivedOrigin
-			}
-			out = append(out, map[string]any{"id": id, "text": line, "origin": origin})
-		})
-	case "derivations", "reasons":
-		seen := map[string]bool{}
-		for _, d := range m.derivations {
-			id := sha16(strings.Join(append([]string{d.fact, d.rule.name}, d.reasons...), "\n"))
-			if seen[id] {
+		t := table{name: a.args[1].plain(), source: valueOf(facts, "has a row for", a.args[1].plain())}
+		if !sqlName.MatchString(t.name) {
+			problems = append(problems, fmt.Sprintf("%s cannot name a table", t.name))
+		}
+		contents, ok := rowContents[t.source]
+		if !ok {
+			problems = append(problems, fmt.Sprintf("engine.go cannot make the rows of %s for %s", t.name, t.source))
+		}
+		numbers := map[int64]bool{}
+		for _, c := range facts("has the column", 4) {
+			if c.args[0].plain() != t.name {
 				continue
 			}
-			seen[id] = true
-			if table == "derivations" {
-				out = append(out, map[string]any{"id": id, "fact_id": sha16(d.fact), "rule": d.rule.name})
-				continue
+			col := column{number: c.args[1].number, name: c.args[2].plain(), content: c.args[3].plain()}
+			if c.args[1].kind != numberTerm || numbers[col.number] {
+				problems = append(problems, fmt.Sprintf("%s has a column without its own number", t.name))
 			}
-			for i, reason := range d.reasons {
-				out = append(out, map[string]any{"derivation_id": id, "position": i + 1, "reason": reason})
+			numbers[col.number] = true
+			if !sqlName.MatchString(col.name) {
+				problems = append(problems, fmt.Sprintf("%s cannot name a column", col.name))
 			}
+			known := false
+			for _, content := range contents {
+				known = known || content == col.content
+			}
+			if ok && !known {
+				problems = append(problems, fmt.Sprintf("engine.go cannot fill %s with %s", t.name, col.content))
+			}
+			t.columns = append(t.columns, col)
 		}
-	case "certificate":
-		out = append(out, map[string]any{"part": partLevel, "subject": "", "value": m.level})
-		for _, f := range m.files {
-			out = append(out, map[string]any{"part": partHash, "subject": f.name, "value": shaHex(f.data)})
-		}
-		out = append(out, map[string]any{"part": partAnswer, "subject": "", "value": answer})
+		sort.Slice(t.columns, func(i, j int) bool { return t.columns[i].number < t.columns[j].number })
+		tables = append(tables, t)
 	}
-	return out
+	return tables, problems
 }
 
-func quoteName(s string) string {
-	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+type certificateEntry struct {
+	subject string
+	value   string
 }
 
-func (m *machine) publish(answer string) error {
-	for _, s := range m.stores() {
-		if err := m.writeStore(s.path, s.name, answer); err != nil {
-			return err
+func (s *session) certificatePart(k *knowledge, answer, part string) []certificateEntry {
+	switch part {
+	case levelNamePart:
+		return []certificateEntry{{"", s.level}}
+	case answerPart:
+		return []certificateEntry{{"", answer}}
+	case loadedHashPart:
+		var entries []certificateEntry
+		for _, name := range append(append([]string{}, s.loaded...), s.tested...) {
+			entries = append(entries, certificateEntry{name, fileHash(s.path(name))})
 		}
+		return entries
+	case machineHashPart:
+		var entries []certificateEntry
+		for _, a := range k.all("part of the machine", 1) {
+			entries = append(entries, certificateEntry{a.args[0].plain(), fileHash(s.path(a.args[0].plain()))})
+		}
+		return entries
 	}
 	return nil
 }
 
-func (m *machine) writeStore(path, store, answer string) error {
-	type column struct {
-		position int64
-		name     string
-	}
-	var tables []string
-	for _, row := range m.facts("has the table", 2) {
-		if textOf(row[0]) == store {
-			tables = append(tables, textOf(row[1]))
+func (s *session) rows(k *knowledge, answer, source string) []map[string]any {
+	var rows []map[string]any
+	switch source {
+	case ruleRows:
+		for _, r := range s.rules {
+			rows = append(rows, map[string]any{
+				"the rule id":             r.id(),
+				"the rule name":           r.name(),
+				"the file the rule is in": r.file,
+				"the number of the line the rule starts on": int64(r.line),
+				"the rule lines joined by newlines":         r.text(),
+			})
+		}
+	case factRows:
+		for _, line := range k.lines() {
+			origin, ok := s.origins[line]
+			if !ok {
+				origin = derivedOrigin
+			}
+			rows = append(rows, map[string]any{
+				"the fact id":                shortHash(line),
+				"the fact as one plain line": line,
+				"the go file that observed the fact and derived for every other fact": origin,
+			})
+		}
+	case derivationRows:
+		for _, d := range k.derivations {
+			rows = append(rows, map[string]any{derivationIDValue: d.id(), "the fact id": shortHash(d.fact.line()), "the rule name": d.rule.name()})
+		}
+	case reasonRows:
+		for _, d := range k.derivations {
+			for i, reason := range d.reasons {
+				rows = append(rows, map[string]any{
+					derivationIDValue:                                        d.id(),
+					"the number of the condition in the rule":                int64(i + 1),
+					"the condition with its blanks filled as one plain line": reason.line(),
+				})
+			}
+		}
+	case certificateRows:
+		for _, a := range k.all("holds", 2) {
+			if a.args[0].plain() != theCertificate {
+				continue
+			}
+			part := a.args[1].plain()
+			for _, entry := range s.certificatePart(k, answer, part) {
+				rows = append(rows, map[string]any{partContent: part, subjectContent: entry.subject, valueContent: entry.value})
+			}
 		}
 	}
-	sort.Strings(tables)
-	columns := map[string][]column{}
-	for _, row := range m.facts("has the column", 4) {
-		n, _ := row[1].NumberValue()
-		columns[textOf(row[0])] = append(columns[textOf(row[0])], column{position: n, name: textOf(row[2])})
+	return rows
+}
+
+func (s *session) storePath() string { return filepath.Join(s.root, s.level+".db") }
+
+func (s *session) withdraw() { os.Remove(s.storePath()) }
+
+func (s *session) publish(k *knowledge, answer string) error {
+	tables, problems := schema(k.all)
+	if len(problems) > 0 {
+		return errors.New(problems[0])
 	}
-	tmp := path + ".new"
-	os.Remove(tmp)
-	db, err := sql.Open("sqlite", tmp)
+	partial := s.storePath() + ".partial"
+	os.Remove(partial)
+	defer os.Remove(partial)
+	db, err := sql.Open("sqlite", partial)
 	if err != nil {
 		return err
 	}
-	fail := func(err error) error {
-		db.Close()
-		os.Remove(tmp)
-		return err
-	}
-	tx, err := db.Begin()
+	defer db.Close()
+	transaction, err := db.Begin()
 	if err != nil {
-		return fail(err)
+		return err
 	}
 	for _, t := range tables {
-		cols := columns[t]
-		sort.Slice(cols, func(i, j int) bool { return cols[i].position < cols[j].position })
-		if len(cols) == 0 {
-			continue
-		}
-		names := make([]string, len(cols))
-		marks := make([]string, len(cols))
-		for i, c := range cols {
-			names[i] = quoteName(c.name)
+		rows := s.rows(k, answer, t.source)
+		definitions := make([]string, len(t.columns))
+		marks := make([]string, len(t.columns))
+		for i, c := range t.columns {
+			kind := "TEXT"
+			if len(rows) > 0 {
+				if _, ok := rows[0][c.content].(int64); ok {
+					kind = "INTEGER"
+				}
+			}
+			definitions[i] = fmt.Sprintf(`"%s" %s`, c.name, kind)
 			marks[i] = "?"
 		}
-		if _, err := tx.Exec("CREATE TABLE " + quoteName(t) + " (" + strings.Join(names, ", ") + ")"); err != nil {
-			tx.Rollback()
-			return fail(err)
+		if _, err := transaction.Exec(fmt.Sprintf(`CREATE TABLE "%s" (%s)`, t.name, strings.Join(definitions, ", "))); err != nil {
+			transaction.Rollback()
+			return err
 		}
-		stmt, err := tx.Prepare("INSERT INTO " + quoteName(t) + " VALUES (" + strings.Join(marks, ", ") + ")")
+		insert, err := transaction.Prepare(fmt.Sprintf(`INSERT INTO "%s" VALUES (%s)`, t.name, strings.Join(marks, ", ")))
 		if err != nil {
-			tx.Rollback()
-			return fail(err)
+			transaction.Rollback()
+			return err
 		}
-		for _, row := range m.tableRows(t, answer) {
-			vals := make([]any, len(cols))
-			for i, c := range cols {
-				vals[i] = row[c.name]
+		for _, row := range rows {
+			values := make([]any, len(t.columns))
+			for i, c := range t.columns {
+				values[i] = row[c.content]
 			}
-			if _, err := stmt.Exec(vals...); err != nil {
-				stmt.Close()
-				tx.Rollback()
-				return fail(err)
+			if _, err := insert.Exec(values...); err != nil {
+				insert.Close()
+				transaction.Rollback()
+				return err
 			}
 		}
-		stmt.Close()
+		insert.Close()
 	}
-	if err := tx.Commit(); err != nil {
-		return fail(err)
-	}
-	if err := db.Close(); err != nil {
-		os.Remove(tmp)
+	if err := transaction.Commit(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := db.Close(); err != nil {
+		return err
+	}
+	return os.Rename(partial, s.storePath())
+}
+
+func run(arguments []string) int {
+	s, err := newSession(arguments)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	s.load()
+	s.observeRules()
+	if len(s.problems) > 0 {
+		return s.stop()
+	}
+	k, err := s.reach()
+	if err != nil {
+		s.problem(fmt.Sprintf("mangle cannot evaluate the knowledge: %v", err))
+		return s.stop()
+	}
+	s.check(k)
+	s.explain(k)
+	answer := s.answer(k)
+	if answer == valueOf(k.all, "is published only when", theKnowledge) {
+		if err := s.publish(k, answer); err != nil {
+			s.problem(fmt.Sprintf("the knowledge cannot be published: %v", err))
+			answer = brokenAnswer
+			s.withdraw()
+		}
+	} else {
+		s.withdraw()
+	}
+	for _, p := range s.problems {
+		a := problemFact(p)
+		s.observe(a, engineFile)
+		k.add(a)
+	}
+	s.print(k)
+	return exitCode(k.all("exits with", 2), answer)
+}
+
+func main() {
+	os.Exit(run(os.Args[1:]))
 }
