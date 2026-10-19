@@ -24,7 +24,9 @@ engine.go, executes instruction, [view] gives reasons for [fact pattern]
 engine.go, executes instruction, [view] is published to [store]
 engine.go, executes instruction, [view] is published only when [answer]
 engine.go, executes instruction, [store] is the sqlite file [path]
-engine.go, executes instruction, [store] keeps [kind]
+engine.go, executes instruction, [store] has the table [table]
+engine.go, executes instruction, [table] has a row for [kind]
+engine.go, executes instruction, [table] has the column [position] [column] [meaning]
 engine.go, executes instruction, [certificate] holds [part]
 engine.go, executes instruction, [kind] is computed as [method]
 engine.go, executes instruction, [file] creates fact [fact pattern]
@@ -48,6 +50,7 @@ engine.go, creates fact, [fact] holds because [reason]
 engine.go, creates fact, [rule] has the id [id]
 engine.go, creates fact, [row] is a row of [source]
 engine.go, creates fact, [row] has the cell [column] [value]
+engine.go, creates fact, [row] is on line [number]
 workflow.plain, creates fact, [command] calls [tool] [input]
 workflow.plain, creates fact, [file] is in the folder
 workflow.plain, creates fact, [file] has the comment [comment]
@@ -134,7 +137,7 @@ a workflow that makes up a result, must break, Each predicate has one creator
 
 "engine.go, loads, spec.plain", means in mangle, 'loads("engine.go", "spec.plain").'
 "spec.plain, is, in the folder", means in mangle, in_the_folder("spec.plain").
-a law is broken, means in mangle, a_law_is_broken().
+the knowledge is broken, means in mangle, the_knowledge_is_broken().
 "[any file], is, a used file", means in mangle, a_used_file(AnyFile).
 "true, exits with, 0", means in mangle, 'exits_with("true", 0).'
 'a change, adds line, notes.plain, "a, is, a note"', means in mangle, 'adds_line("a change", "notes.plain", "a, is, a note").'
@@ -281,12 +284,17 @@ difference, is, a slot name
 a condition with a badly named blank, adds line, spec.plain, "    if [someone], is, a predicate"
 a condition with a badly named blank, must break, Every blank is named after a slot
 
-a law is broken
-    if [any thing], breaks, [any law]
+the knowledge is broken
+    if [any thing], breaks, [law]
+    and not [law], is, a finding
+[law], is, a finding
+    if [law], is, a warning
+[law], is, a finding
+    if [law], is, a serious warning
 the folder, conforms, false
-    if a law is broken
+    if the knowledge is broken
 the folder, conforms, true
-    if not a law is broken
+    if not the knowledge is broken
 true, exits with, 0
 false, exits with, 1
 broken, exits with, 2
@@ -319,17 +327,45 @@ the knowledge view, gives reasons for, [thing] breaks [law]
 
 a rule id, is computed as, the first 16 hex digits of the sha256 of the rule lines joined by newlines
 a fact id, is computed as, the first 16 hex digits of the sha256 of the fact as one plain line
+a derivation id, is computed as, the first 16 hex digits of the sha256 of the fact and the rule name and the reasons as plain lines joined by newlines
 
 the knowledge view, is published to, the store
 the knowledge view, is published only when, true
 the store, is the sqlite file, ../store.db
-the store, keeps, every rule with its id
-the store, keeps, every fact with its id
-the store, keeps, every reason for every derived fact
-the store, keeps, the certificate
 the certificate, holds, the hash of every file engine.go loads
 the certificate, holds, the answer
-the store, keeps, every not condition a derived fact rests on
+
+the store, has the table, rules
+rules, has a row for, every rule
+rules, has the column, 1, id, the rule id
+rules, has the column, 2, name, the rule name
+rules, has the column, 3, file, the file the rule is in
+rules, has the column, 4, line, the number of the line the rule starts on
+rules, has the column, 5, text, the rule lines joined by newlines
+
+the store, has the table, facts
+facts, has a row for, every fact
+facts, has the column, 1, id, the fact id
+facts, has the column, 2, text, the fact as one plain line
+facts, has the column, 3, origin, the file that creates the predicate of the fact
+
+the store, has the table, derivations
+derivations, has a row for, every way a rule derives a fact
+derivations, has the column, 1, id, the derivation id
+derivations, has the column, 2, fact_id, the fact id
+derivations, has the column, 3, rule, the rule name
+
+the store, has the table, reasons
+reasons, has a row for, every reason of every derivation
+reasons, has the column, 1, derivation_id, the derivation id
+reasons, has the column, 2, position, the number of the condition in the rule
+reasons, has the column, 3, reason, the condition with its blanks filled as one plain line
+
+the store, has the table, certificate
+certificate, has a row for, every part the certificate holds
+certificate, has the column, 1, part, what the certificate holds
+certificate, has the column, 2, subject, the file a hash is of and empty for the answer
+certificate, has the column, 3, value, the sha256 of the file in hex or the answer
 
 plain language, is loaded as, rules and facts
 rows, is loaded as, a row per line with a cell per column
@@ -352,6 +388,7 @@ engine_connections.csv, gives the key in, port
     and [row], has the cell, [column], [value]
     and [source], calls its entities, [prefix]
     and [entity], is the join of, [prefix], [value]
+    and not [row], is, a duplicate
 [row], is of the kind, [kind]
     if [row], is a row of, [source]
     and [source], is, a source
@@ -419,6 +456,8 @@ engine_connections.csv, gives the key in, port
 [row], breaks, Every close ends an interval
     if [row], closes, [any entity]
     and not [row], is, an interval end
+Every open starts an interval, is, a warning
+Every close ends an interval, is, a warning
 
 an open twice, adds line, engine_connections.csv, 7000,49,connect,40049
 an open twice, must break, Every open starts an interval
@@ -438,6 +477,7 @@ wire_flows.csv, opens with, SYN
 wire_flows.csv, closes with, FIN
 wire_flows.csv, calls its entities, "wire flow "
 wire_flows.csv, gives the key in, src_port
+wire_flows.csv, gives the duplicate key in, packet
 
 connections, is, a fusion
 connections, fuses, engine_connections.csv
@@ -477,18 +517,47 @@ connections, allows a time difference of, 5
 
 [row], breaks, Every event is corroborated by every view of its fusion
     if [row], is a row of, [source]
+    and not [row], is, a duplicate
     and [fusion], is, a fusion
     and [fusion], fuses, [source]
     and [fusion], fuses, [other source]
     and [source], differs from, [other source]
     and not [row], is corroborated in, [other source]
+Every event is corroborated by every view of its fusion, is, a serious warning
 
-a wire flow nobody logged, adds line, wire_flows.csv, 8001,40999,SYN
+a wire flow nobody logged, adds line, wire_flows.csv, 8001,40999,SYN,9001
 a wire flow nobody logged, must break, Every event is corroborated by every view of its fusion
+a wire flow nobody logged, must answer, true
 a wire flow nobody logged, must explain, '"wire_flows.csv:8, breaks, Every event is corroborated by every view of its fusion", holds because, "not wire_flows.csv:8, is corroborated in, engine_connections.csv"'
 
 a disconnect the wire saw too late, adds line, engine_connections.csv, 8000,49,disconnect,40049
-a disconnect the wire saw too late, adds line, wire_flows.csv, 8100,40049,FIN
+a disconnect the wire saw too late, adds line, wire_flows.csv, 8100,40049,FIN,9002
 a disconnect the wire saw too late, must break, Every event is corroborated by every view of its fusion
 
 the knowledge view, shows, [row] is corroborated by [other row]
+
+[row], has the duplicate key, [key]
+    if [row], is a row of, [source]
+    and [source], gives the duplicate key in, [column]
+    and [row], has the cell, [column], [key]
+[row], is a duplicate of, [other row]
+    if [row], has the duplicate key, [key]
+    and [other row], has the duplicate key, [key]
+    and [row], is a row of, [source]
+    and [other row], is a row of, [source]
+    and [row], is on line, [number]
+    and [other row], is on line, [other number]
+    and [other number], is before, [number]
+[row], is, a duplicate
+    if [row], is a duplicate of, [any row]
+
+[row], breaks, No event is duplicated
+    if [row], is a duplicate of, [any row]
+No event is duplicated, is, a warning
+
+a duplicated wire event, adds line, wire_flows.csv, 1001,40047,SYN,1
+a duplicated wire event, must break, No event is duplicated
+a duplicated wire event, must answer, true
+a duplicated wire event, must explain, '"wire_flows.csv:8, breaks, No event is duplicated", holds because, "wire_flows.csv:8, is a duplicate of, wire_flows.csv:2"'
+
+the knowledge view, shows, [row] is a duplicate of [other row]
