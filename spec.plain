@@ -477,6 +477,7 @@ connections, allows a time difference of, 5
 
 [row], breaks, Every event is corroborated by every view of its fusion
     if [row], is a row of, [source]
+    and [fusion], is, a fusion
     and [fusion], fuses, [source]
     and [fusion], fuses, [other source]
     and [source], differs from, [other source]

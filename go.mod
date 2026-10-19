@@ -19,4 +19,5 @@ require (
 	modernc.org/mathutil v1.7.1
 	modernc.org/memory v1.12.1
 	modernc.org/sqlite v1.60.1
+	mvdan.cc/sh/v3 v3.13.1
 )
