@@ -13,11 +13,11 @@ kernel/engine.go, creates fact, [fact pattern] names [predicate]
 kernel/engine.go, creates fact, [rule] has the blank [blank]
 kernel/engine.go, creates fact, [fact pattern] has the slot [slot]
 kernel/engine.go, creates fact, [fact] holds because [reason]
-kernel/engine.go, creates fact, [rule] has the id [id]
 kernel/engine.go, creates fact, [row] is a row of [source]
 kernel/engine.go, creates fact, [row] has the cell [column] [value]
 kernel/engine.go, creates fact, [row] is on line [number]
 kernel/engine.go, creates fact, [rule] is in the file [file]
+kernel/engine.go, creates fact, [rule] is on line [number]
 kernel/engine.go, creates fact, [level] is proven
 kernel/engine.go, creates fact, [file] is certified
 kernel/engine.go, creates fact, [fact] is missing
@@ -114,16 +114,24 @@ there is a problem, means in mangle, there_is_a_problem().
 a rule that reads back differently, adds line, kernel/human.plain, "kernel/engine.go, loads, kernel/extra.plain"
 a rule that reads back differently, adds line, kernel/extra.plain, '"zzz", means, nothing'
 a rule that reads back differently, must break, Every rule reads back as written
-a rule that reads back differently, must explain, '"kernel/extra.plain:1, breaks, Every rule reads back as written", holds because, "kernel/extra.plain:1, is, read back differently"'
+a rule that reads back differently, must explain, '"b55a370302a20713, breaks, Every rule reads back as written", holds because, "b55a370302a20713, is, read back differently"'
 
-[rule], breaks, Every rule has the id it must have
-    if [rule], must have the id, [id]
-    and not [rule], has the id, [id]
+kernel, expects, "00021adce41fe7b6, is in the file, kernel/human.plain"
+kernel, expects, "00021adce41fe7b6, is on line, 1"
 
-kernel/human.plain:1, must have the id, 00021adce41fe7b6
+[rule], breaks, No rule is written twice
+    if [rule], is on line, [number]
+    and [rule], is on line, [other number]
+    and [number], differs from, [other number]
+[rule], breaks, No rule is written twice
+    if [rule], is in the file, [file]
+    and [rule], is in the file, [other file]
+    and [file], differs from, [other file]
+No rule is written twice, is, a warning
 
-a rule with a wrong id, adds line, kernel/human.plain, "kernel/human.plain:2, must have the id, ffffffffffffffff"
-a rule with a wrong id, must break, Every rule has the id it must have
+a rule written twice, adds line, kernel/human.plain, "true, exits with, 0"
+a rule written twice, must break, No rule is written twice
+a rule written twice, must answer, true
 
 .plain, means, plain language
 .go, means, go
@@ -260,8 +268,9 @@ the knowledge, shows, [text] is a problem
 the knowledge, gives reasons for, [thing] breaks [law]
 
 a rule id, is computed as, the first 16 hex digits of the sha256 of the rule lines joined by newlines
+a rule name, is computed as, the rule id
 a fact id, is computed as, the first 16 hex digits of the sha256 of the fact as one plain line
-a derivation id, is computed as, the first 16 hex digits of the sha256 of the fact and the rule name and the reasons as plain lines joined by newlines
+a derivation id, is computed as, the first 16 hex digits of the sha256 of the fact and the rule id and the reasons as plain lines joined by newlines
 
 the knowledge, is published to, the store
 the knowledge, is published only when, true
@@ -274,10 +283,9 @@ the certificate, holds, the answer
 the store, has the table, rules
 rules, has a row for, every rule
 rules, has the column, 1, id, the rule id
-rules, has the column, 2, name, the rule name
-rules, has the column, 3, file, the file the rule is in
-rules, has the column, 4, line, the number of the line the rule starts on
-rules, has the column, 5, text, the rule lines joined by newlines
+rules, has the column, 2, file, the file the rule is in
+rules, has the column, 3, line, the number of the line the rule starts on
+rules, has the column, 4, text, the rule lines joined by newlines
 
 the store, has the table, facts
 facts, has a row for, every fact
@@ -289,7 +297,7 @@ the store, has the table, derivations
 derivations, has a row for, every way a rule derives a fact
 derivations, has the column, 1, id, the derivation id
 derivations, has the column, 2, fact_id, the fact id
-derivations, has the column, 3, rule, the rule name
+derivations, has the column, 3, rule, the rule id
 
 the store, has the table, reasons
 reasons, has a row for, every reason of every derivation
