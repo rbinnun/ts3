@@ -4,8 +4,8 @@ command: list the folder, calls, list, the folder
     if command: list the folder, returned, file, [file]
 
 [command], calls, [tool], [file]
-    if [tool], finds comments in, [language]
-    and [file], written in, [language]
+    if [file], written in, [language]
+    and [tool], finds comments in, [language]
     and [command], is the join of, "command: find the comments in ", [file]
 
 [file], has the comment, [comment]
@@ -15,5 +15,4 @@ command: list the folder, calls, list, the folder
 
 [command], calls, try, [change]
     if [change], is, a change
-    and not this run is a change
     and [command], is the join of, "command: try ", [change]
