@@ -24,6 +24,7 @@ db.execute("create table if not exists undos(day date, actor integer, target int
 db.execute("create table if not exists inventory(day date, sampled boolean, collection varchar, path varchar, type varchar, n bigint, did_values bigint, uri_values bigint)")
 db.execute("create table if not exists days_done(day date)")
 TIME = re.compile(rb'"time_us":\s*(\d+)')
+RX = re.compile(rb',?\s*"_rx_us":\s*\d+')
 def stage_tables():
     db.execute("create or replace table s_roles(actor_did varchar, role varchar, tdid varchar, collection varchar, rkey varchar, op varchar)")
     db.execute("create or replace table s_act(did varchar, kind varchar, collection varchar, op varchar, n integer)")
@@ -67,21 +68,28 @@ for i in range(ndays):
         keys = sorted(o['Key'] for o in s3.list_objects_v2(Bucket=B, Prefix=f'{kind}/{day}/').get('Contents', []))
         lines = []; prev_last = -1; prev_tail = set(); repeated = 0
         for key in keys:
-            body = s3.get_object(Bucket=B, Key=key)['Body']; last = -1; tail = collections.deque(); done = False
+            local = f'{DATA}/tmp/current.jsonl.gz'
+            for attempt in range(5):   # whole-file download with retries; long streams get cut
+                try: s3.download_file(B, key, local); break
+                except Exception as e:
+                    print(f'  {key}: download attempt {attempt+1} failed ({type(e).__name__}), retrying', flush=True); time.sleep(10 * (attempt + 1))
+            else: raise RuntimeError(f'could not download {key}')
+            body = open(local, 'rb'); last = -1; tail = collections.deque(); done = False
             try:
                 for line in io.BufferedReader(gzip.GzipFile(fileobj=body), buffer_size=1 << 20):
                     if not line.endswith(b'\n') or not line.strip(): continue
                     m = TIME.search(line); tu = int(m.group(1)) if m else -1
                     if tu >= cutoff: done = True; break
-                    if tu <= prev_last and hash(line) in prev_tail: repeated += 1; continue
+                    key_line = RX.sub(b'', line)   # the collector's receive stamp differs between copies of the same event
+                    if tu <= prev_last and hash(key_line) in prev_tail: repeated += 1; continue
                     if tu > last: last = tu
-                    tail.append((tu, hash(line)))
+                    tail.append((tu, hash(key_line)))
                     while tail and tail[0][0] < last - 120_000_000: tail.popleft()
                     lines.append(line)
                     if len(lines) >= 250_000: batch(lines, day, kind); lines = []
             except EOFError:
                 print(f'  {key}: interrupted file, read up to its last complete line', flush=True)
-            body.close(); prev_last = last; prev_tail = {h for _, h in tail}
+            body.close(); os.remove(local); prev_last = last; prev_tail = {h for _, h in tail}
             if done: break
         if lines: batch(lines, day, kind)
         if repeated: print(f'  {kind}: skipped {repeated:,} events repeated in an overlap', flush=True)
