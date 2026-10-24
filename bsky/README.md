@@ -9,3 +9,4 @@ Reads the Jetstream capture in R2 (read-only; never touches the collector) and t
 5. `build_roles.py`: applies the rules to the facts: one row per pointer per event (actor, role, target, time), plus undo rows for deletes matched to their creates.
 
 Needs `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, and optionally `BSKY_DATA` (default `bsky/data/`, not committed). Python packages: `requirements.txt`.
+6. `week_build.py FIRST_DAY DAYS`: for longer spans. Per day it keeps pair counts per role (actor, target, role, count), node activity per account, undo pair counts (deletes matched to creates within the day) and the path inventory. Exact event times and record keys are not kept; they stay in the facts of steps 1–5 and in R2. Likes' two role paths are read directly, and their inventory is taken from 1 in 10 batches (`sampled`).
