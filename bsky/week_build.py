@@ -1,4 +1,4 @@
-import os, sys, gzip, io, re, time, datetime, boto3, duckdb, pandas as pd
+import os, sys, gzip, io, re, time, datetime, collections, boto3, duckdb, pandas as pd
 # usage: week_build.py FIRST_DAY DAYS [HOURS_PER_DAY]
 # stores, per day: pair counts per role, node activity, undo pair counts, and the path inventory (see README)
 first, ndays = datetime.date.fromisoformat(sys.argv[1]), int(sys.argv[2])
@@ -62,16 +62,29 @@ for i in range(ndays):
     cutoff = int(datetime.datetime.fromisoformat(day + 'T00:00:00+00:00').timestamp() * 1e6) + hours * 3600 * 1_000_000
     td = time.time(); stage_tables()
     for kind in ['follows', 'blocks', 'reposts', 'posts', 'other', 'likes']:
-        key = s3.list_objects_v2(Bucket=B, Prefix=f'{kind}/{day}/')['Contents'][0]['Key']
-        body = s3.get_object(Bucket=B, Key=key)['Body']; lines = []
-        for line in io.BufferedReader(gzip.GzipFile(fileobj=body), buffer_size=1 << 20):
-            if not line.strip(): continue
-            m = TIME.search(line)
-            if m and int(m.group(1)) >= cutoff: break
-            lines.append(line)
-            if len(lines) >= 250_000: batch(lines, day, kind); lines = []
+        # a day can hold several files (after a collector restart); an interrupted file is read up to its last complete line,
+        # and events repeated where two files overlap are skipped
+        keys = sorted(o['Key'] for o in s3.list_objects_v2(Bucket=B, Prefix=f'{kind}/{day}/').get('Contents', []))
+        lines = []; prev_last = -1; prev_tail = set(); repeated = 0
+        for key in keys:
+            body = s3.get_object(Bucket=B, Key=key)['Body']; last = -1; tail = collections.deque(); done = False
+            try:
+                for line in io.BufferedReader(gzip.GzipFile(fileobj=body), buffer_size=1 << 20):
+                    if not line.endswith(b'\n') or not line.strip(): continue
+                    m = TIME.search(line); tu = int(m.group(1)) if m else -1
+                    if tu >= cutoff: done = True; break
+                    if tu <= prev_last and hash(line) in prev_tail: repeated += 1; continue
+                    if tu > last: last = tu
+                    tail.append((tu, hash(line)))
+                    while tail and tail[0][0] < last - 120_000_000: tail.popleft()
+                    lines.append(line)
+                    if len(lines) >= 250_000: batch(lines, day, kind); lines = []
+            except EOFError:
+                print(f'  {key}: interrupted file, read up to its last complete line', flush=True)
+            body.close(); prev_last = last; prev_tail = {h for _, h in tail}
+            if done: break
         if lines: batch(lines, day, kind)
-        body.close()
+        if repeated: print(f'  {kind}: skipped {repeated:,} events repeated in an overlap', flush=True)
     # targets: an account, or the author named in a record address; pointers with no account are dropped
     db.execute("""create or replace temp table sr as select actor_did, role, op, collection, rkey,
                   case when tdid like 'at://%' then split_part(tdid,'/',3) else tdid end t from s_roles""")
