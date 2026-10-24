@@ -1,0 +1,27 @@
+app.bsky.feed.like, at, commit.record.subject.uri, means, liked
+app.bsky.feed.like, at, commit.record.via.uri, means, liked via
+app.bsky.feed.repost, at, commit.record.subject.uri, means, reposted
+app.bsky.feed.repost, at, commit.record.via.uri, means, reposted via
+app.bsky.graph.follow, at, commit.record.subject, means, followed
+app.bsky.graph.follow, at, commit.record.via.uri, means, followed via
+app.bsky.graph.block, at, commit.record.subject, means, blocked
+app.bsky.feed.post, at, commit.record.reply.parent.uri, means, replied to
+app.bsky.feed.post, at, commit.record.reply.root.uri, means, replied in the thread of
+app.bsky.feed.post, at, commit.record.embed.record.uri, means, embedded
+app.bsky.feed.post, at, commit.record.embed.record.record.uri, means, embedded
+app.bsky.feed.post, at, commit.record.facets.*.features.*.did, means, mentioned
+app.bsky.graph.listitem, at, commit.record.subject, means, listed
+app.bsky.graph.listitem, at, commit.record.list, means, listed in
+app.bsky.graph.listblock, at, commit.record.subject, means, subscribed to the block list
+app.bsky.feed.threadgate, at, commit.record.post, means, limited replies on
+app.bsky.feed.threadgate, at, commit.record.allow.*.list, means, allowed replies from the list
+app.bsky.feed.threadgate, at, commit.record.hiddenReplies.*, means, hid the reply
+app.bsky.feed.postgate, at, commit.record.post, means, limited quotes on
+app.bsky.feed.postgate, at, commit.record.detachedEmbeddingUris.*, means, detached the quote
+app.bsky.actor.profile, at, commit.record.pinnedPost.uri, means, pinned
+app.bsky.actor.profile, at, commit.record.joinedViaStarterPack.uri, means, joined via
+app.bsky.feed.generator, at, commit.record.did, means, has its feed served by
+app.bsky.graph.starterpack, at, commit.record.list, means, packed the list
+app.bsky.graph.starterpack, at, commit.record.feeds.*.uri, means, packed the feed
+app.bsky.graph.verification, at, commit.record.subject, means, verified
+app.bsky.graph.referencelistoptout, at, commit.record.subject, means, opted out of the list
